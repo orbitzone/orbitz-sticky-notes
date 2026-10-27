@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Orbitz Sticky Notes
+Comment=Keep your notes close at hand
+Comment[pt_BR]=Mantenha suas notas sempre por perto
+Exec=orbitz-sticky-notes
+Icon=io.orbitz.Postits
+Terminal=false
+Categories=Utility;TextTools;
+StartupNotify=true

@@ -1,0 +1,34 @@
+{
+  "app-id": "io.orbitz.Postits",
+  "runtime": "org.gnome.Platform",
+  "runtime-version": "49",
+  "sdk": "org.gnome.Sdk",
+  "command": "orbitz-sticky-notes",
+  "finish-args": [
+    "--share=ipc",
+    "--socket=x11"
+  ],
+  "modules": [
+    {
+      "name": "orbitz-sticky-notes",
+      "buildsystem": "simple",
+      "build-commands": [
+        "make install PREFIX=/app"
+      ],
+      "sources": [
+        {
+          "type": "dir",
+          "path": "..",
+          "skip": [
+            ".git",
+            ".flatpak-builder",
+            "build-dir",
+            "repo",
+            "dist",
+            "__pycache__"
+          ]
+        }
+      ]
+    }
+  ]
+}

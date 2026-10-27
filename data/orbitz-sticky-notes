@@ -1,0 +1,10 @@
+#!/bin/sh
+# X11 also runs through XWayland in compatible Wayland sessions.
+set -eu
+if [ -z "${DISPLAY:-}" ]; then
+    echo "Orbitz Sticky Notes requires X11 or XWayland (DISPLAY is unset)." >&2
+    exit 1
+fi
+export GDK_BACKEND=x11
+prefix=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+exec python3 "$prefix/share/orbitz-sticky-notes/sticky-notes/postits.py" "$@"

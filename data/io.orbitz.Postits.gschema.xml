@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<schemalist>
+  <schema id="io.orbitz.Postits" path="/io/orbitz/Postits/">
+    <key name="ui-language" type="s">
+      <choices><choice value="pt-BR"/><choice value="en-US"/></choices>
+      <default>'pt-BR'</default>
+      <summary>Interface language</summary>
+    </key>
+  </schema>
+</schemalist>

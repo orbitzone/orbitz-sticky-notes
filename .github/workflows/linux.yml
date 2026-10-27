@@ -1,0 +1,37 @@
+name: Linux tests and Flatpak
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  flatpak:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install build and test tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y flatpak flatpak-builder python3-gi gir1.2-gtk-3.0 desktop-file-utils appstream xvfb
+      - name: Test with isolated data and virtual display
+        run: |
+          export XDG_DATA_HOME="$(mktemp -d)"
+          export XDG_CONFIG_HOME="$(mktemp -d)"
+          GSETTINGS_BACKEND=memory xvfb-run -a /usr/bin/python3 -m unittest discover -s tests -v
+          desktop-file-validate data/io.orbitz.Postits.desktop
+          appstreamcli validate --no-net data/io.orbitz.Postits.metainfo.xml
+      - name: Build Flatpak
+        run: |
+          flatpak remote-add --user --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
+          flatpak-builder --user --disable-rofiles-fuse --install-deps-from=flathub --assumeyes --repo=repo build-dir packaging/io.orbitz.Postits.json
+          flatpak build build-dir python3 -c "import sys; sys.path.insert(0, '/app/share/orbitz-sticky-notes/sticky-notes'); import storage, card; from ui_language import ui; assert ui.tr('sticky.title') != 'sticky.title'"
+          mkdir -p dist
+          flatpak build-bundle repo dist/orbitz-sticky-notes-x86_64.flatpak io.orbitz.Postits --runtime-repo=https://dl.flathub.org/repo/flathub.flatpakrepo
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: orbitz-sticky-notes-x86_64
+          path: dist/*.flatpak
+          if-no-files-found: error

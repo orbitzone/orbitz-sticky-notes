@@ -1,0 +1,10 @@
+__pycache__/
+*.py[cod]
+*.sqlite3*
+*.db
+.flatpak-builder/
+build/
+build-dir/
+repo/
+dist/
+*.flatpak
