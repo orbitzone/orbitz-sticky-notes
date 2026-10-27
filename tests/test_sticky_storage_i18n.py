@@ -68,6 +68,7 @@ class StickyStorageLocaleTests(unittest.TestCase):
         with patch.object(storage.sqlite3,'connect',return_value=db),patch.object(storage.os,'chmod'):
             self.failure(lambda:storage.Store(self.root/'notes'),'Invalid notes database. The files were preserved.')
         db.executescript.assert_not_called()
+        db.close.assert_called_once()
 
     def test_invalid_legacy_note_preserves_original_and_inserts_no_note(self):
         legacy=self.root/'legacy.json';legacy.write_text(json.dumps({'notes':None}));before=legacy.read_bytes()
@@ -78,6 +79,8 @@ class StickyStorageLocaleTests(unittest.TestCase):
             with patch.object(storage.sqlite3,'connect',side_effect=track):
                 self.failure(lambda:storage.Store(self.root/'notes',legacy),'Invalid legacy note. The original was preserved.')
             self.assertEqual(legacy.read_bytes(),before)
-            self.assertEqual(connections[0].execute('SELECT count(*) FROM notes').fetchone()[0],0)
+            with self.assertRaises(sqlite3.ProgrammingError):connections[0].execute('SELECT 1')
+            with sqlite3.connect(self.root/'notes/notes.sqlite3') as verify:
+                self.assertEqual(verify.execute('SELECT count(*) FROM notes').fetchone()[0],0)
         finally:
             for db in connections:db.close()

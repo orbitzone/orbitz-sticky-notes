@@ -32,6 +32,28 @@ class PinLockedError(ValueError):
 class BackupPurgeError(OSError):
     """A snapshot could not be safely purged; the active note was retained."""
 
+@contextmanager
+def _startup_lock(directory, timeout=3):
+    """Serialize startup before opening SQLite; waiting is bounded, not blocking."""
+    deadline=time.monotonic()+timeout
+    flags=os.O_CREAT|os.O_RDWR|os.O_NONBLOCK|getattr(os,'O_NOFOLLOW',0)
+    fd=os.open(Path(directory)/'.startup.lock',flags,0o600)
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):raise OSError('Sticky startup lock is not a regular file.')
+        os.fchmod(fd,0o600)
+        while True:
+            try:
+                fcntl.flock(fd,fcntl.LOCK_EX|fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                remaining=deadline-time.monotonic()
+                if remaining<=0:raise sqlite3.OperationalError('Database startup is locked; retry opening notes.') from None
+                time.sleep(min(.05,remaining))
+        yield
+    finally:
+        try:fcntl.flock(fd,fcntl.LOCK_UN)
+        finally:os.close(fd)
+
 def _enable_wal(db):
     """Set WAL mode with a short bounded retry for concurrent startup locks."""
     db.execute('PRAGMA busy_timeout=0')
@@ -40,7 +62,9 @@ def _enable_wal(db):
             try:
                 # Keep SQLite's existing PRAGMA result semantics; malformed
                 # databases are rejected by the following quick_check.
-                db.execute('PRAGMA journal_mode=WAL').fetchone()
+                cursor=db.execute('PRAGMA journal_mode=WAL')
+                try:cursor.fetchone()
+                finally:cursor.close()
                 return
             except sqlite3.OperationalError as error:
                 code=getattr(error,'sqlite_errorcode',None)
@@ -75,7 +99,16 @@ class Store:
     def __init__(self, directory=DATA, legacy=None):
         self.directory=Path(directory);self.directory.mkdir(parents=True,exist_ok=True,mode=0o700)
         self.path=self.directory/'notes.sqlite3'
-        self.db=sqlite3.connect(self.path,timeout=3)
+        # No SQLite connection may enter PRAGMA/schema/import/first backup
+        # concurrently with another initializer for this same directory.
+        with _startup_lock(self.directory):
+            self.db=sqlite3.connect(self.path,timeout=3)
+            try:self._initialize(legacy)
+            except BaseException:
+                self.db.close()
+                raise
+
+    def _initialize(self,legacy):
         os.chmod(self.path,0o600)
         _enable_wal(self.db);self.db.execute('PRAGMA synchronous=FULL')
         self.db.row_factory=sqlite3.Row
