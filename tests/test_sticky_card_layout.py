@@ -114,9 +114,12 @@ class StickyLayoutTests(unittest.TestCase):
         for widget in (host,box,text,scroll,bar):
             widget.get_style_context().add_provider(css,Gtk.STYLE_PROVIDER_PRIORITY_USER)
         def drain():
-            for _ in range(100):
-                if not Gtk.events_pending():break
-                Gtk.main_iteration_do(False)
+            # Layout/scrollbar unmapping is scheduled by GTK's frame clock.
+            # An empty event queue does not mean the next frame has run yet.
+            from gi.repository import GLib
+            loop=GLib.MainLoop()
+            GLib.timeout_add(200,lambda:loop.quit() or False)
+            loop.run()
         try:
             text.get_buffer().set_text('Texto curto');host.show_all();drain()
             initial=host.get_size();self.assertFalse(bar.get_mapped())
