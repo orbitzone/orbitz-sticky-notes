@@ -1,6 +1,8 @@
 [Desktop Entry]
 Type=Application
-Name=Orbitz Sticky Notes
+Name=Sticky Notes - By Orbitz
+Name[en_US]=Sticky Notes - By Orbitz
+Name[pt_BR]=Sticky Notes - By Orbitz
 Comment=Keep your notes close at hand
 Comment[pt_BR]=Mantenha suas notas sempre por perto
 Exec=orbitz-sticky-notes

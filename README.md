@@ -1,4 +1,4 @@
-# Orbitz Sticky Notes
+# Sticky Notes - By Orbitz
 
 Notas coloridas e independentes para sua área de trabalho Linux. Escreva, organize por cores, personalize títulos, abra links com Ctrl+clique e mantenha as notas à mão sem instalar uma extensão do GNOME Shell.
 

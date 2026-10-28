@@ -90,7 +90,14 @@ class SecretUiTests(TestCase):
         def pin_entry(_box,_label):
             entry=Mock();entry.get_text.side_effect=values[len(entries)];entries.append(entry);return entry
         host.pin_entry=pin_entry
-        gtk=SimpleNamespace(Dialog=lambda **kw:dialog,Label=lambda **kw:Mock(),ResponseType=SimpleNamespace(CANCEL=0,ACCEPT=1))
+        class LanguageCombo:
+            def append(self,*_args):pass
+            def set_active_id(self,value):self.active_id=value
+            def get_active_id(self):return self.active_id
+            def connect(self,*_args):pass
+        gtk=SimpleNamespace(Dialog=lambda **kw:dialog,Label=lambda **kw:Mock(),Box=lambda **kw:Mock(),
+            ComboBoxText=LanguageCombo,Orientation=SimpleNamespace(HORIZONTAL=0),
+            ResponseType=SimpleNamespace(CANCEL=0,ACCEPT=1))
         self.ns['Gtk']=gtk
         return dialog,entries
 

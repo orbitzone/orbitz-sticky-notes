@@ -96,12 +96,18 @@ def watch(callback):
 def get_locale():return _locale
 
 
+def set_locale(value):
+    locale=normalize(value)
+    if _settings is not None:
+        _settings.set_string('ui-language',locale)
+    else:
+        refresh(locale)
+
+
 def configure():
     global _settings
     if _settings is not None:return
-    refresh(os.environ.get('ORBITZ_LOCALE','pt-BR'))
-    if os.environ.get('ORBITZ_LOCALE'):
-        return
+    environment_locale=os.environ.get('ORBITZ_LOCALE')
     try:
         import gi
         from gi.repository import Gio
@@ -109,9 +115,11 @@ def configure():
         schema=source.lookup('io.orbitz.Postits',True) if source else None
         if schema and schema.has_key('ui-language'):
             _settings=Gio.Settings.new_full(schema,None,None)
-            refresh(_settings.get_string('ui-language'))
+            refresh(environment_locale or _settings.get_string('ui-language'))
             _settings.connect('changed::ui-language',lambda settings,key:refresh(settings.get_string(key)))
+            return
     except (ImportError,ValueError,RuntimeError):pass
+    refresh(environment_locale or 'pt-BR')
 
 
 configure()

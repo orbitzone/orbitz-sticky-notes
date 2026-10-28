@@ -26,7 +26,7 @@
   "sticky.start_failed": "Não foi possível abrir os post-its.",
   "sticky.title": "STICKY NOTE",
   "sticky.trash_drag_hint": "Shift+arraste a margem inferior vazia para mover a nota até a lixeira. Solte fora para apenas mover.",
-  "sticky.window_title": "Sticky Notes · Orbitz",
+  "sticky.window_title": "Sticky Notes - By Orbitz",
   "sticky.yellow": "Amarelo",
   "sticky.backup_error": "Não foi possível criar o backup: {error}",
   "domain.sticky_storage.invalid_database": "Banco de notas inválido. Os arquivos foram preservados.",
@@ -63,5 +63,8 @@
   "domain.sticky_storage.pin_not_set": "Configure um PIN antes de proteger uma nota.",
   "domain.sticky_storage.pin_locked": "Muitas tentativas. Aguarde antes de tentar novamente.",
   "domain.sticky_storage.pin_incorrect": "PIN incorreto.",
-  "sticky.pin_retry": "Muitas tentativas. Aguarde {seconds}s antes de tentar novamente."
+  "sticky.pin_retry": "Muitas tentativas. Aguarde {seconds}s antes de tentar novamente.",
+  "sticky.language": "Idioma da interface",
+  "sticky.language_pt_br": "Português (Brasil)",
+  "sticky.language_en_us": "English (United States)"
 }

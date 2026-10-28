@@ -26,7 +26,7 @@
   "sticky.start_failed": "Could not open Sticky Notes.",
   "sticky.title": "STICKY NOTE",
   "sticky.trash_drag_hint": "Shift+drag the empty bottom margin to move the note to the trash. Release elsewhere to only move it.",
-  "sticky.window_title": "Sticky Notes · Orbitz",
+  "sticky.window_title": "Sticky Notes - By Orbitz",
   "sticky.yellow": "Yellow",
   "sticky.backup_error": "Could not create the backup: {error}",
   "domain.sticky_storage.invalid_database": "Invalid notes database. The files were preserved.",
@@ -63,5 +63,8 @@
   "domain.sticky_storage.pin_not_set": "Set up a PIN before protecting a note.",
   "domain.sticky_storage.pin_locked": "Too many attempts. Wait before trying again.",
   "domain.sticky_storage.pin_incorrect": "Incorrect PIN.",
-  "sticky.pin_retry": "Too many attempts. Wait {seconds}s before trying again."
+  "sticky.pin_retry": "Too many attempts. Wait {seconds}s before trying again.",
+  "sticky.language": "Interface language",
+  "sticky.language_pt_br": "Português (Brasil)",
+  "sticky.language_en_us": "English (United States)"
 }

@@ -545,13 +545,22 @@ class Card(Gtk.ApplicationWindow):
         dialog=ui.widget(Gtk.Dialog,transient_for=self,modal=True,title=ui.msg('sticky.settings'))
         self.settings_dialog=dialog
         box=dialog.get_content_area();box.set_spacing(8);box.set_border_width(16)
+        language_row=Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL,spacing=12)
+        language_label=ui.widget(Gtk.Label,label=ui.msg('sticky.language'),xalign=0)
+        language=Gtk.ComboBoxText()
+        language.append('pt-BR',ui.tr('sticky.language_pt_br'))
+        language.append('en-US',ui.tr('sticky.language_en_us'))
+        language.set_active_id(ui.get_locale())
+        language.connect('changed',lambda combo:ui.set_locale(combo.get_active_id()) if combo.get_active_id() else None)
+        language_row.pack_start(language_label,True,True,0);language_row.pack_start(language,False,False,0)
+        box.pack_start(language_row,False,False,0)
         warning=ui.widget(Gtk.Label,label=ui.msg('sticky.pin_limitation'),wrap=True,xalign=0)
         warning.set_max_width_chars(48);box.pack_start(warning,False,False,0)
         old=self.pin_entry(box,ui.msg('sticky.pin_current')) if configured else None
         new=self.pin_entry(box,ui.msg('sticky.pin_new'));confirm=self.pin_entry(box,ui.msg('sticky.pin_confirm'))
         feedback=ui.widget(Gtk.Label,wrap=True,xalign=0);box.pack_start(feedback,False,False,0)
-        dialog.add_button(ui.tr('sticky.cancel'),Gtk.ResponseType.CANCEL)
-        dialog.add_button(ui.tr('sticky.pin_save'),Gtk.ResponseType.ACCEPT);dialog.set_default_response(Gtk.ResponseType.ACCEPT)
+        ui.button(dialog,ui.msg('sticky.cancel'),Gtk.ResponseType.CANCEL)
+        ui.button(dialog,ui.msg('sticky.pin_save'),Gtk.ResponseType.ACCEPT);dialog.set_default_response(Gtk.ResponseType.ACCEPT)
         dialog.show_all();(old or new).grab_focus();saved=False
         try:
             while self.alive and dialog.run()==Gtk.ResponseType.ACCEPT:
