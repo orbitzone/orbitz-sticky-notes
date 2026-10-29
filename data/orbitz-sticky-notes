@@ -7,4 +7,8 @@ if [ -z "${DISPLAY:-}" ]; then
 fi
 export GDK_BACKEND=x11
 prefix=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+libdir="$prefix/lib"
+if [ -d "$prefix/lib64" ]; then libdir="$prefix/lib64"; fi
+export GI_TYPELIB_PATH="$libdir/girepository-1.0${GI_TYPELIB_PATH:+:$GI_TYPELIB_PATH}"
+export LD_LIBRARY_PATH="$libdir${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 exec python3 "$prefix/share/orbitz-sticky-notes/sticky-notes/postits.py" "$@"

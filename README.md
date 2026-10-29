@@ -25,17 +25,24 @@ O pacote x86_64 passou por build e smoke de importação no sandbox; os 90 teste
 ## Uso e dados
 
 - Clique e escreva; título editável e seis cores.
-- Ctrl+N cria nota; Ctrl+Z / Ctrl+Shift+Z desfaz/refaz; Ctrl+H oculta.
-- O menu oferece exclusão e configurações do PIN; Shift+arraste na margem inferior inicia o movimento com lixeira. Arraste o canto inferior para redimensionar.
-- Notas secretas se bloqueiam ao reabrir e após 15 segundos com o ponteiro fora.
+- Ctrl+B aplica negrito, Ctrl+I itálico, Ctrl+U sublinhado e Ctrl+E abre o seletor de emoji. Com texto selecionado, o atalho alterna a formatação; sem seleção, ativa o estilo para o próximo texto digitado.
+- Dicas de texto foram removidas. Ao passar sobre imagens e PDFs anexados, ainda aparece a miniatura visual personalizada.
+- Ctrl+N cria nota; Ctrl+Z / Ctrl+Shift+Z desfaz/refaz; Ctrl+H oculta. Fechar a nota também a oculta, sem excluir seu conteúdo.
+- Arraste a faixa compacta acima do título para mover a nota. Arraste o canto inferior para redimensionar. O menu fecha ao clicar fora.
+- O menu permite reexibir notas ocultas e arquivar a nota atual. Notas ocultas e arquivadas aparecem como títulos em listas suspensas; selecionar uma nota oculta a reabre, e selecionar uma arquivada a restaura. Títulos de notas secretas ficam ocultos nessas listas.
+- A exclusão permanente só está disponível no menu da nota e remove a nota imediatamente. Fechar ou ocultar nunca exclui uma nota.
+- O menu permite anexar arquivos; também é possível arrastá-los sobre o texto da nota sem inserir o caminho no conteúdo. Os ícones ficam no rodapé: clique para abrir; clique com o botão direito para mostrar a pasta de origem ou remover o vínculo da nota. São aceitos formatos comuns de imagem, texto, PDF, Microsoft Office, OpenDocument/OpenOffice e arquivos ZIP, RAR, 7z, TAR e compactados. Cada nota aceita até 10 arquivos, 50 MiB por arquivo e 100 MiB no total.
+- “Enviar nota por e-mail” abre um rascunho no cliente padrão, com o texto no corpo e os anexos selecionados. O app não envia a mensagem; revise e envie no cliente de e-mail. Em sistemas com portal de e-mail antigo, o app usa o portal de abertura de links para entregar os anexos ao cliente padrão.
+- Notas secretas se bloqueiam ao reabrir, ao ocultar/fechar a nota e após 15 segundos com o ponteiro fora. Enquanto bloqueadas, o conteúdo e os anexos ficam ocultos e alterações no texto, título, cor, tamanho, anexos ou ordem das janelas exigem o PIN; o cadeado central abre o diálogo de desbloqueio. Movimentos feitos pelo gerenciador de janelas não são salvos enquanto a nota está bloqueada. O PIN é uma barreira da interface, não criptografa os dados. Em Configurações, “Esqueci meu PIN” solicita confirmação e então apaga todas as notas secretas e seus registros nos backups para permitir definir outro PIN; as notas comuns são preservadas.
 - No Flatpak, banco e backups ficam em `~/.var/app/io.orbitz.Postits/data/orbitz-postits/`. Não apagamos os dados ao atualizar. A instalação antiga do Orbitz permanece intacta; não há importação automática. Evite executar as duas versões ao mesmo tempo, pois compartilham o ID de aplicação.
+- Anexos permanecem nas pastas escolhidas; o app grava caminhos e nomes no banco e nos backups, sem apagar os arquivos originais. No Flatpak, a seleção usa o portal de arquivos e concede acesso aos arquivos escolhidos. Se um arquivo for movido ou apagado, remova e adicione o anexo novamente. Excluir a nota remove os vínculos, os metadados dos backups e os rascunhos temporários do Orbitz associados a ela; cópias já abertas em outros aplicativos ficam fora do controle do app.
 - PT-BR é o idioma padrão. Para inglês: `flatpak run --env=ORBITZ_LOCALE=en-US io.orbitz.Postits`. Configurações de idioma do Orbitz Widgets não são usadas.
 
 ## Compatibilidade e privacidade
 
 O pacote usa GTK 3 via X11, inclusive em sessões Wayland com XWayland. Sessões sem XWayland não são suportadas nesta versão. Posição, manter acima e presença em todos os espaços dependem do gerenciador de janelas. Testes em GNOME, KDE e Xfce, escalas mistas e monitores reais ainda devem compor a matriz de validação; build/testes automatizados não comprovam esse comportamento visual.
 
-O Flatpak não recebe acesso geral à pasta pessoal nem à rede. Acesso X11 é necessário para o comportamento atual das janelas e tem o isolamento limitado próprio desse protocolo. Links web/e-mail usam o aplicativo padrão por Gio/portal; caminhos locais fora do sandbox não estão disponíveis. Não há sincronização, telemetria ou migração automática de dados.
+O Flatpak não recebe acesso geral à pasta pessoal nem à rede. Acesso X11 é necessário para o comportamento atual das janelas e tem o isolamento limitado próprio desse protocolo. Links web/e-mail usam o aplicativo padrão por Gio/portal; caminhos locais fora do sandbox não estão disponíveis sem seleção explícita. O PIN protege apenas a interface: textos, títulos, caminhos e nomes dos anexos permanecem sem criptografia no SQLite e nos backups. Os arquivos anexados continuam sob as permissões da pasta de origem. Não há sincronização, telemetria ou migração automática de dados.
 
 ## Compilar e desenvolver
 

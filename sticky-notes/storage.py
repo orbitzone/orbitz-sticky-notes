@@ -25,6 +25,20 @@ PIN_ITERATIONS=600000
 PIN_FAILURE_LIMIT=5
 PIN_COOLDOWN_SECONDS=30
 PIN_METADATA_KEY='secret_pin_v1'
+ATTACHMENT_EXTENSIONS={
+    # Images and text documents
+    'png','jpg','jpeg','gif','webp','bmp','tif','tiff','svg','heic','avif',
+    'txt','md','rst','csv','tsv','rtf','html','htm','xml','json','log',
+    'pdf','doc','docx','xls','xlsx','ppt','pptx',
+    # OpenDocument / OpenOffice formats
+    'odt','ott','ods','ots','odp','otp','odg','otg','odf','odc','odi','odb',
+    'fodt','fods','fodp','fodg','sxw','sxc','sxi','sxd','sxg','sxm',
+    # Common archives and compressed files
+    'zip','rar','7z','tar','gz','bz2','xz','zst','tgz','tbz','tbz2','txz','lz','lzma','lz4','z','cab','arj','ace','lha'
+}
+ATTACHMENT_MAX_COUNT=10
+ATTACHMENT_MAX_FILE_BYTES=50*1024*1024
+ATTACHMENT_MAX_TOTAL_BYTES=100*1024*1024
 
 class PinLockedError(ValueError):
     """Temporary UI PIN cooldown; retry_after is the remaining whole seconds."""
@@ -103,14 +117,16 @@ class Store:
         # concurrently with another initializer for this same directory.
         with _startup_lock(self.directory):
             self.db=sqlite3.connect(self.path,timeout=3)
-            try:self._initialize(legacy)
+            try:
+                self.db.execute('PRAGMA secure_delete=ON')
+                self._initialize(legacy)
             except BaseException:
                 self.db.close()
                 raise
 
     def _initialize(self,legacy):
         os.chmod(self.path,0o600)
-        _enable_wal(self.db);self.db.execute('PRAGMA synchronous=FULL')
+        _enable_wal(self.db);self.db.execute('PRAGMA synchronous=FULL');self.db.execute('PRAGMA foreign_keys=ON')
         self.db.row_factory=sqlite3.Row
         if self.db.execute('PRAGMA quick_check').fetchone()[0]!='ok':raise _i18n.exception(ValueError, 'domain.sticky_storage.invalid_database')
         self.db.executescript('''
@@ -122,6 +138,9 @@ class Store:
           archived INTEGER NOT NULL DEFAULT 0,
           secret INTEGER NOT NULL DEFAULT 0 CHECK(secret IN (0,1)));
         CREATE TABLE IF NOT EXISTS metadata(key TEXT PRIMARY KEY, value TEXT NOT NULL);
+        CREATE TABLE IF NOT EXISTS attachments(
+          id TEXT PRIMARY KEY, note_id TEXT NOT NULL REFERENCES notes(id) ON DELETE CASCADE,
+          path TEXT NOT NULL, name TEXT NOT NULL, size INTEGER NOT NULL, added_at INTEGER NOT NULL);
         ''')
         # Add display title/privacy metadata without changing existing text,
         # IDs/revisions or retained snapshots. Secrets remain plaintext on disk.
@@ -188,7 +207,7 @@ class Store:
                 raise OSError('Sticky backup snapshot is not a regular file.')
         return paths
 
-    def _purge_backups(self,identity,directory):
+    def _purge_backups(self,identity,directory,reset_pin=False):
         """Prepare every purged snapshot before atomically replacing any one.
 
         A failure during the replacement sequence can leave a subset purged;
@@ -208,6 +227,8 @@ class Store:
                     destination=None
                     try:
                         destination=sqlite3.connect(temporary,timeout=3)
+                        destination.execute('PRAGMA foreign_keys=ON')
+                        destination.execute('PRAGMA secure_delete=ON')
                         if source.execute('PRAGMA quick_check').fetchone()[0]!='ok':
                             raise sqlite3.DatabaseError('Invalid SQLite backup snapshot.')
                         table=source.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='notes'").fetchone()
@@ -215,10 +236,16 @@ class Store:
                         if 'id' not in columns:
                             raise sqlite3.DatabaseError('Backup snapshot has no verifiable note identity column.')
                         source.backup(destination)
-                        count=destination.execute('SELECT count(*) FROM notes WHERE id=?',(identity,)).fetchone()[0]
+                        count=(destination.execute('SELECT count(*) FROM notes WHERE id=?',(identity,)).fetchone()[0]
+                               if identity is not None else 0)
+                        metadata_exists=destination.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='metadata'").fetchone()
+                        pin_count=(destination.execute('SELECT count(*) FROM metadata WHERE key=?',(PIN_METADATA_KEY,)).fetchone()[0]
+                                   if reset_pin and metadata_exists else 0)
                         if count:
                             destination.execute('DELETE FROM notes WHERE id=?',(identity,))
-                            destination.commit()
+                        if pin_count:
+                            destination.execute('DELETE FROM metadata WHERE key=?',(PIN_METADATA_KEY,))
+                        if count or pin_count:destination.commit()
                         if destination.execute('PRAGMA journal_mode').fetchone()[0].lower()=='wal':
                             checkpoint=destination.execute('PRAGMA wal_checkpoint(TRUNCATE)').fetchone()
                             if checkpoint[0]:raise sqlite3.DatabaseError('Could not checkpoint staged backup snapshot.')
@@ -230,36 +257,36 @@ class Store:
                     finally:
                         if destination is not None:destination.close()
                         source.close()
-                    if count:
+                    if count or pin_count:
                         with temporary.open('rb') as staged_file:os.fsync(staged_file.fileno())
                         staged_fd=os.open(temporary,os.O_RDONLY|getattr(os,'O_NOFOLLOW',0))
                         staged_stat=os.fstat(staged_fd)
                         if not stat.S_ISREG(staged_stat.st_mode):
                             os.close(staged_fd)
                             raise OSError('Purged backup staging file is not regular.')
-                        staged.append((temporary,snapshot,staged_fd,staged_stat,self._digest_fd(staged_fd)))
+                        staged.append((temporary,snapshot,staged_fd,staged_stat,self._digest_fd(staged_fd),identity,reset_pin))
                     else:temporary.unlink()
                 except BaseException:
                     self._remove_sqlite_artifacts(temporary)
                     raise
-            for temporary,snapshot,staged_fd,staged_stat,digest in staged:
-                self._verify_file_identity(temporary,staged_fd,staged_stat,digest,identity)
+            for temporary,snapshot,staged_fd,staged_stat,digest,deleted_identity,pin_removed in staged:
+                self._verify_file_identity(temporary,staged_fd,staged_stat,digest,deleted_identity,pin_removed)
                 os.replace(temporary,snapshot)
-                self._verify_file_identity(snapshot,staged_fd,staged_stat,digest,identity)
+                self._verify_file_identity(snapshot,staged_fd,staged_stat,digest,deleted_identity,pin_removed)
                 self._sync_directory(directory)
             # Verify every destination again after all promotions, before the
             # active database transaction is allowed to commit the deletion.
-            for _temporary,snapshot,staged_fd,staged_stat,digest in staged:
-                self._verify_file_identity(snapshot,staged_fd,staged_stat,digest,identity)
+            for _temporary,snapshot,staged_fd,staged_stat,digest,deleted_identity,pin_removed in staged:
+                self._verify_file_identity(snapshot,staged_fd,staged_stat,digest,deleted_identity,pin_removed)
         except BaseException:
-            for temporary,snapshot,staged_fd,staged_stat,digest in staged:
+            for temporary,snapshot,staged_fd,staged_stat,digest,_deleted_identity,_pin_removed in staged:
                 if not temporary.exists():
                     try:self._restore_promoted(snapshot,staged_fd,directory)
                     except OSError:pass
                 self._remove_sqlite_artifacts(temporary)
             raise
         finally:
-            for _temporary,_snapshot,staged_fd,_staged_stat,_digest in staged:
+            for _temporary,_snapshot,staged_fd,_staged_stat,_digest,_deleted_identity,_pin_removed in staged:
                 os.close(staged_fd)
 
     @staticmethod
@@ -325,7 +352,7 @@ class Store:
             digest.update(chunk);offset+=len(chunk)
         return digest.digest()
 
-    def _verify_file_identity(self,path,staged_fd,staged_stat,digest,identity):
+    def _verify_file_identity(self,path,staged_fd,staged_stat,digest,identity,reset_pin=False):
         current=os.lstat(path)
         if (not stat.S_ISREG(current.st_mode) or current.st_dev!=staged_stat.st_dev or
                 current.st_ino!=staged_stat.st_ino):
@@ -342,8 +369,11 @@ class Store:
             try:
                 if check.execute('PRAGMA quick_check').fetchone()[0]!='ok':
                     raise OSError('Promoted backup failed its integrity check.')
-                if check.execute('SELECT count(*) FROM notes WHERE id=?',(identity,)).fetchone()[0]:
+                if identity is not None and check.execute('SELECT count(*) FROM notes WHERE id=?',(identity,)).fetchone()[0]:
                     raise OSError('Promoted backup still contains the deleted note.')
+                if reset_pin and check.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='metadata'").fetchone():
+                    if check.execute('SELECT count(*) FROM metadata WHERE key=?',(PIN_METADATA_KEY,)).fetchone()[0]:
+                        raise OSError('Promoted backup still contains the reset PIN metadata.')
             finally:check.close()
         finally:os.close(fd)
         final=os.lstat(path)
@@ -376,7 +406,7 @@ class Store:
             if os.path.lexists(artifact):artifact.unlink()
 
     def all(self,archived=None):
-        # Archived legacy rows remain visible when the archive UI is removed.
+        # Preserve the unfiltered store API; the UI requests active or archived rows explicitly.
         if archived is None:
             return [dict(row) for row in self.db.execute('SELECT * FROM notes ORDER BY rowid')]
         return [dict(row) for row in self.db.execute('SELECT * FROM notes WHERE archived=? ORDER BY rowid',(int(archived),))]
@@ -390,6 +420,40 @@ class Store:
         identity=str(uuid.uuid4())
         with self.db:self.db.execute('INSERT INTO notes(id,text,color,x,y) VALUES(?,?,?,?,?)',(identity,'',COLORS[0],x,y))
         return self.get(identity)
+
+    @staticmethod
+    def _attachment_path(path):
+        path=Path(path)
+        info=os.lstat(path)
+        if not stat.S_ISREG(info.st_mode):raise _i18n.exception(ValueError,'domain.sticky_storage.attachment_invalid')
+        if info.st_size>ATTACHMENT_MAX_FILE_BYTES:raise _i18n.exception(ValueError,'domain.sticky_storage.attachment_too_large')
+        if path.suffix.lower().lstrip('.') not in ATTACHMENT_EXTENSIONS:
+            raise _i18n.exception(ValueError,'domain.sticky_storage.attachment_type')
+        return path.resolve(strict=True),info.st_size
+
+    def attachments(self,identity):
+        if not self.db.execute('SELECT 1 FROM notes WHERE id=?',(identity,)).fetchone():
+            raise _i18n.exception(ValueError,'domain.sticky_storage.note_not_found')
+        return [dict(row) for row in self.db.execute('SELECT * FROM attachments WHERE note_id=? ORDER BY rowid',(identity,))]
+
+    def add_attachment(self,identity,path):
+        path,size=self._attachment_path(path)
+        row=self.db.execute('SELECT 1 FROM notes WHERE id=?',(identity,)).fetchone()
+        if not row:raise _i18n.exception(ValueError,'domain.sticky_storage.note_not_found')
+        current=self.attachments(identity)
+        if len(current)>=ATTACHMENT_MAX_COUNT:raise _i18n.exception(ValueError,'domain.sticky_storage.attachment_count')
+        if sum(item['size'] for item in current)+size>ATTACHMENT_MAX_TOTAL_BYTES:
+            raise _i18n.exception(ValueError,'domain.sticky_storage.attachment_total_size')
+        if any(item['path']==str(path) for item in current):
+            raise _i18n.exception(ValueError,'domain.sticky_storage.attachment_duplicate')
+        identity_id=str(uuid.uuid4())
+        with self.db:
+            self.db.execute('INSERT INTO attachments(id,note_id,path,name,size,added_at) VALUES(?,?,?,?,?,?)',
+                            (identity_id,identity,str(path),path.name,size,int(time.time())))
+        return dict(self.db.execute('SELECT * FROM attachments WHERE id=?',(identity_id,)).fetchone())
+
+    def remove_attachment(self,identity,attachment_id):
+        with self.db:return self.db.execute('DELETE FROM attachments WHERE id=? AND note_id=?',(attachment_id,identity)).rowcount==1
 
     @staticmethod
     def _validate_pin(pin):
@@ -523,10 +587,40 @@ class Store:
                 if cursor.rowcount!=1:
                     raise OSError('The note could not be removed from active storage; retry the deletion.')
                 self.db.commit()
+                self._checkpoint_after_deletion()
                 return True
             except BaseException:
                 if self.db.in_transaction:self.db.rollback()
                 raise
+
+    def reset_pin_and_delete_secret_notes(self):
+        """Remove secret notes and the global PIN from active data and snapshots."""
+        directory=self.directory/'backups'
+        with _backup_lock(directory):
+            self.db.execute('BEGIN IMMEDIATE')
+            try:
+                identities=[row[0] for row in self.db.execute('SELECT id FROM notes WHERE secret=1 ORDER BY rowid')]
+                for identity in identities:
+                    self._purge_backups(identity,directory)
+                self._purge_backups(None,directory,reset_pin=True)
+                cursor=self.db.execute('DELETE FROM notes WHERE secret=1')
+                if cursor.rowcount!=len(identities):
+                    raise OSError('The secret notes changed during PIN reset; retry the operation.')
+                self.db.execute('DELETE FROM metadata WHERE key=?',(PIN_METADATA_KEY,))
+                self.db.commit()
+            except BaseException:
+                if self.db.in_transaction:self.db.rollback()
+                raise
+        checkpoint_clean=self._checkpoint_after_deletion()
+        return {'note_ids':identities,'wal_cleaned':checkpoint_clean}
+
+    def _checkpoint_after_deletion(self):
+        """Try to remove old WAL page images after secure_delete has wiped rows."""
+        try:
+            result=self.db.execute('PRAGMA wal_checkpoint(TRUNCATE)').fetchone()
+            return bool(result is not None and result[0]==0 and (result[1]<0 or result[1]==result[2]))
+        except sqlite3.Error:
+            return False
 
     def text(self,identity,value,revision):
         if not isinstance(value,str) or len(value)>100000:raise _i18n.exception(ValueError, 'domain.sticky_storage.note_length_limit')

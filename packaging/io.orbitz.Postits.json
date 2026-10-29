@@ -4,11 +4,46 @@
   "runtime-version": "49",
   "sdk": "org.gnome.Sdk",
   "command": "orbitz-sticky-notes",
+  "appstream-compose": false,
+  "build-options": {
+    "no-debuginfo": true
+  },
   "finish-args": [
     "--share=ipc",
     "--socket=x11"
   ],
   "modules": [
+    {
+      "name": "poppler",
+      "buildsystem": "cmake-ninja",
+      "build-options": {"no-debuginfo": true},
+      "config-opts": [
+        "-DCMAKE_BUILD_TYPE=Release",
+        "-DENABLE_GLIB=ON",
+        "-DENABLE_GOBJECT_INTROSPECTION=ON",
+        "-DENABLE_CPP=OFF",
+        "-DENABLE_QT5=OFF",
+        "-DENABLE_QT6=OFF",
+        "-DENABLE_UTILS=OFF",
+        "-DENABLE_BOOST=OFF",
+        "-DENABLE_LIBCURL=OFF",
+        "-DENABLE_NSS3=OFF",
+        "-DENABLE_GPGME=OFF",
+        "-DENABLE_LIBTIFF=OFF",
+        "-DENABLE_LCMS=OFF",
+        "-DENABLE_GTK_DOC=OFF",
+        "-DBUILD_GTK_TESTS=OFF",
+        "-DBUILD_QT5_TESTS=OFF",
+        "-DBUILD_QT6_TESTS=OFF",
+        "-DBUILD_CPP_TESTS=OFF",
+        "-DBUILD_MANUAL_TESTS=OFF"
+      ],
+      "sources": [{
+        "type": "archive",
+        "url": "https://poppler.freedesktop.org/poppler-26.06.0.tar.xz",
+        "sha256": "4cb4e5a3dc8cb5eec751c8a23c8ba19f61f96dedc0cd07d2aee6b0c8e2cf6ba4"
+      }]
+    },
     {
       "name": "orbitz-sticky-notes",
       "buildsystem": "simple",

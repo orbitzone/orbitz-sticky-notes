@@ -3,7 +3,7 @@ import ast
 from pathlib import Path
 from types import SimpleNamespace,MethodType
 from unittest import TestCase,main
-from unittest.mock import Mock
+from unittest.mock import Mock,call
 import sys
 ROOT=Path(__file__).resolve().parents[1]
 sys.path.insert(0,str(ROOT/'sticky-notes'))
@@ -16,14 +16,37 @@ def methods(file,cls,names,namespace):
     return namespace
 
 class InteractionTests(TestCase):
-    def deletion(self,response=1):
-        dialog=Mock();dialog.run.return_value=response
-        gtk=SimpleNamespace(MessageDialog=lambda **kw:dialog,MessageType=SimpleNamespace(WARNING=0),ButtonsType=SimpleNamespace(NONE=0),ResponseType=SimpleNamespace(CANCEL=0,ACCEPT=1))
-        ns=methods('card.py','Card',['delete_note'],dict(Gtk=gtk,ui=ui))
-        host=SimpleNamespace(alive=True,flush=Mock(return_value=True),app=SimpleNamespace(store=Mock()),note={'id':'synthetic'},revision=7,destroy=Mock(),present=Mock(),text=Mock(),error=Mock())
-        return ns['delete_note'],host,dialog
+    def test_formatted_document_round_trips_and_legacy_text_stays_plain(self):
+        import json
+        from card import RICH_TEXT_PREFIX
+        tree=ast.parse((ROOT/'sticky-notes/card.py').read_text())
+        functions=[node for node in tree.body if isinstance(node,ast.FunctionDef) and node.name in {'decode_document','encode_document'}]
+        ns={'json':json,'RICH_TEXT_PREFIX':RICH_TEXT_PREFIX,'RICH_STYLES':('bold','italic','underline')}
+        exec(compile(ast.Module(body=functions,type_ignores=[]),'card.py','exec'),ns)
+        plain='legacy note';self.assertEqual(ns['encode_document'](plain,[]),plain)
+        encoded=ns['encode_document']('Hello',[
+            {'style':'bold','start':0,'end':5},{'style':'underline','start':1,'end':4}])
+        self.assertEqual(ns['decode_document'](encoded),('Hello',[('bold',0,5),('underline',1,4)]))
 
-    def test_delete_ack_removes_window_only_after_cas_success(self):
+    def test_format_shortcuts_are_handled_only_by_text_editor(self):
+        key_names={98:'b',105:'i',117:'u',101:'e'}
+        gdk=SimpleNamespace(ModifierType=SimpleNamespace(CONTROL_MASK=1),keyval_name=lambda key:key_names.get(key))
+        ns=methods('card.py','Card',['text_format_key_press','key_press'],dict(Gdk=gdk))
+        text=Mock();host=SimpleNamespace(secret_locked=False,text=text,toggle_format=Mock(return_value=True))
+        for key,style in ((98,'bold'),(105,'italic'),(117,'underline')):
+            self.assertTrue(ns['text_format_key_press'](host,text,SimpleNamespace(state=1,keyval=key)))
+            host.toggle_format.assert_called_with(style)
+        self.assertTrue(ns['text_format_key_press'](host,text,SimpleNamespace(state=1,keyval=101)))
+        text.emit.assert_called_once_with('insert-emoji')
+        app_host=SimpleNamespace(secret_locked=False,secret_activity=Mock(),app=Mock())
+        self.assertFalse(ns['key_press'](app_host,None,SimpleNamespace(keyval=98,state=1)))
+
+    def deletion(self,response=1):
+        ns=methods('card.py','Card',['delete_note'],dict())
+        host=SimpleNamespace(alive=True,flush=Mock(return_value=True),app=SimpleNamespace(store=Mock()),note={'id':'synthetic'},revision=7,destroy=Mock(),text=Mock(),error=Mock())
+        return ns['delete_note'],host,None
+
+    def test_delete_menu_action_deletes_immediately_after_save(self):
         fn,host,_=self.deletion();self.assertTrue(fn(host))
         self.assertEqual(host.flush.call_count,1);host.app.store.delete.assert_called_once_with('synthetic',7);host.destroy.assert_called_once()
 
@@ -36,7 +59,7 @@ class InteractionTests(TestCase):
     def test_title_and_text_save_in_revision_order_and_title_is_per_note(self):
         ns=methods('card.py','Card',['flush','title_changed'],dict())
         store=Mock();store.text.return_value=8;store.title.return_value=9
-        host=SimpleNamespace(dirty=True,value=Mock(return_value='body'),saved='old',revision=7,
+        host=SimpleNamespace(dirty=True,document_value=Mock(return_value='body'),value=Mock(return_value='body'),saved='old',revision=7,
             title_entry=Mock(),saved_title='',title_dirty=False,note={'id':'synthetic'},
             app=SimpleNamespace(store=store),status=Mock())
         host.title_entry.get_text.return_value='  Personal  '
@@ -56,115 +79,67 @@ class InteractionTests(TestCase):
         self.assertFalse(ns['flush'](host));self.assertTrue(host.title_dirty)
         host.error.assert_called_once();host.status.hide.assert_not_called()
 
-    def test_menu_exposes_delete_without_archive_or_restore(self):
+    def test_menu_exposes_hide_archive_lists_and_direct_delete(self):
         ns=methods('card.py','Card',['add_options'],dict(ui=ui,Gtk=SimpleNamespace(Menu=lambda:Mock(),MenuItem=lambda **kw:Mock(),CheckMenuItem=lambda **kw:Mock(),SeparatorMenuItem=lambda:Mock()),NAMES=[],COLORS=[]))
         menu=Mock();host=Mock();host.note={'above':0}
         ns['add_options'](host,menu)
-        host.app.store.all.assert_not_called()
         source=(ROOT/'sticky-notes/card.py').read_text()
-        self.assertNotIn("ui.msg('sticky.archive')",source);self.assertNotIn("ui.msg('sticky.restore_archive')",source)
+        self.assertIn("item(ui.msg('sticky.archive'),self.archive_note)",source)
+        self.assertIn("ui.msg('sticky.show_hidden_notes')",source)
+        self.assertIn("ui.msg('sticky.archived_notes')",source)
+        self.assertNotIn("sticky.confirm_delete_permanent",source)
         self.assertIn("item(ui.msg('sticky.delete_note'),self.delete_note)",source)
 
-    def test_header_menu_replaces_custom_drag_and_preserves_right_click(self):
+    def test_header_menu_preserves_right_click(self):
         ns=methods('card.py','Card',['context_menu_press'],dict())
         source=(ROOT/'sticky-notes/card.py').read_text()
         self.assertIn('self.menu_button.set_popup(self.options_menu)',source)
         context=ast.get_source_segment(source,next(n for n in ast.walk(ast.parse(source)) if isinstance(n,ast.FunctionDef) and n.name=='context_menu_press'))
         self.assertNotIn('self.begin_move_drag(',context)
-        self.assertNotIn('self.app.begin_note_drag(self)',context)
         host=SimpleNamespace(options_menu=Mock())
         self.assertFalse(ns['context_menu_press'](host,None,SimpleNamespace(button=1)))
         host.options_menu.popup_at_pointer.assert_not_called()
         self.assertTrue(ns['context_menu_press'](host,None,SimpleNamespace(button=3)))
         host.options_menu.popup_at_pointer.assert_called_once()
 
-    def test_trash_gesture_is_shift_drag_from_empty_bottom_margin_only(self):
-        ns=methods('card.py','Card',['trash_drag_press','trash_drag_region'],
-            dict(Gdk=SimpleNamespace(ModifierType=SimpleNamespace(SHIFT_MASK=1))))
-        host=SimpleNamespace(get_position=lambda:(100,200),get_size=lambda:(310,300))
-        region=ns['trash_drag_region']
-        self.assertTrue(region(host,SimpleNamespace(x_root=220,y_root=470)))
-        self.assertFalse(region(host,SimpleNamespace(x_root=220,y_root=450)))
-        self.assertFalse(region(host,SimpleNamespace(x_root=390,y_root=470)))
-        host.trash_drag_region=Mock(return_value=True);host.app=Mock();host.app.begin_note_drag.return_value=True
-        host.begin_move_drag=Mock();event=SimpleNamespace(button=1,state=1,x_root=220,y_root=470,time=42)
-        self.assertTrue(ns['trash_drag_press'](host,None,event))
-        host.app.begin_note_drag.assert_called_once_with(host)
-        host.begin_move_drag.assert_called_once_with(1,220,470,42)
-        event.state=0
-        self.assertFalse(ns['trash_drag_press'](host,None,event))
-        self.assertEqual(host.app.begin_note_drag.call_count,1)
+    def test_top_handle_only_moves_note_with_window_manager(self):
+        ns=methods('card.py','Card',['header_drag_press'],dict())
+        app=Mock();host=SimpleNamespace(secret_activity=Mock(),authorize_secret_edit=Mock(return_value=True),
+            app=app,begin_move_drag=Mock())
+        event=SimpleNamespace(button=1,x_root=240,y_root=180,time=73)
+        self.assertTrue(ns['header_drag_press'](host,None,event))
+        host.secret_activity.assert_called_once_with()
+        host.begin_move_drag.assert_called_once_with(1,240,180,73)
+        host.authorize_secret_edit.return_value=False;host.begin_move_drag.reset_mock()
+        self.assertTrue(ns['header_drag_press'](host,None,event));host.begin_move_drag.assert_not_called()
 
-    def test_menu_describes_drag_gesture_and_delete_fallback(self):
+    def test_menu_has_no_drag_delete_help_item(self):
         source=(ROOT/'sticky-notes/card.py').read_text()
-        self.assertIn("ui.msg('sticky.trash_drag_hint')",source)
+        self.assertNotIn('Shift+arraste',source)
+        self.assertNotIn('Shift+drag',source)
         self.assertIn("item(ui.msg('sticky.delete_note'),self.delete_note)",source)
 
-    def test_menu_hides_note_tooltips_until_popup_closes(self):
-        ns=methods('card.py','Card',['menu_opened','menu_closed'],dict())
-        title=Mock();body=Mock();grip=Mock()
-        host=SimpleNamespace(menu_tooltips=[(title,'Edit title'),(body,'Open link'),(grip,None)])
-        ns['menu_opened'](host)
-        for widget in (title,body,grip):widget.set_tooltip_text.assert_called_once_with(None)
-        ns['menu_closed'](host)
-        title.set_tooltip_text.assert_called_with('Edit title')
-        body.set_tooltip_text.assert_called_with('Open link')
-        self.assertEqual(grip.set_tooltip_text.call_count,1)
+    def test_text_tooltips_are_removed_but_attachment_preview_is_kept(self):
+        source=(ROOT/'sticky-notes/card.py').read_text()
+        self.assertNotIn('set_tooltip_text',source)
+        self.assertIn("button.connect('query-tooltip'",source)
 
-    def test_drag_release_inside_deletes_once_and_failure_restores_position(self):
-        callbacks=[];glib=SimpleNamespace(source_remove=Mock(),idle_add=lambda fn:callbacks.append(fn))
-        ns=methods('postits.py','Postits',['end_note_drag'],dict(GLib=glib))
-        card=SimpleNamespace(alive=True,delete_note=Mock(return_value=False),move=Mock())
-        popup=Mock();host=SimpleNamespace(drag_card=card,drag_origin=(40,60),drag_timer=9,trash_window=popup)
-        ns['end_note_drag'](host,True);popup.destroy.assert_called_once();glib.source_remove.assert_called_once_with(9)
-        popup.get_window.return_value.set_cursor.assert_called_once_with(None)
-        card.delete_note.assert_not_called();self.assertIsNone(host.drag_card)
-        self.assertFalse(callbacks[0]());card.delete_note.assert_called_once();card.move.assert_called_once_with(40,60)
+    def test_desktop_activation_uses_gtk_application_routing_without_a_filesystem_lock(self):
+        source=(ROOT/'sticky-notes/postits.py').read_text()
+        self.assertIn("self.connect('activate',self.activate_cards)",source)
+        self.assertIn('if not notes:notes=[self.store.create()]',source)
+        self.assertNotIn('acquire_instance_lock',source)
 
-    def test_cancel_or_other_card_destruction_never_deletes(self):
-        glib=SimpleNamespace(source_remove=Mock(),idle_add=Mock())
-        ns=methods('postits.py','Postits',['end_note_drag'],dict(GLib=glib))
-        card=Mock();host=SimpleNamespace(drag_card=card,drag_timer=0,trash_window=Mock())
-        ns['end_note_drag'](host,False,Mock());self.assertIs(host.drag_card,card)
-        ns['end_note_drag'](host,False);card.delete_note.assert_not_called();glib.idle_add.assert_not_called()
-
-    def test_drag_hit_target_matches_popup_geometry_and_release_state(self):
-        pointer=Mock();pointer.get_position.return_value=(Mock(),500,650)
-        pointer.get_position.return_value[0].get_root_window.return_value.get_device_position.return_value=(None,500,650,0)
-        display=Mock();display.get_default_seat.return_value.get_pointer.return_value=pointer
-        display.get_monitor_at_point.return_value.get_workarea.return_value=SimpleNamespace(x=0,y=0,width=1000,height=720)
-        gdk=SimpleNamespace(Display=SimpleNamespace(get_default=lambda:display),ModifierType=SimpleNamespace(BUTTON1_MASK=1))
-        ns=methods('postits.py','Postits',['track_note_drag'],dict(Gdk=gdk))
-        popup=Mock();popup.get_size.return_value=(200,90);popup.get_position.return_value=(400,606)
-        host=SimpleNamespace(drag_card=SimpleNamespace(alive=True),trash_window=popup,end_note_drag=Mock())
-        host.trash_cursor=object()
-        self.assertFalse(ns['track_note_drag'](host));popup.move.assert_called_once_with(400,606);host.end_note_drag.assert_called_once_with(True)
-        popup.get_window.return_value.set_cursor.assert_called_once_with(host.trash_cursor)
-        pointer.get_position.return_value=(pointer.get_position.return_value[0],10,10)
-        self.assertFalse(ns['track_note_drag'](host));self.assertEqual(host.end_note_drag.call_args.args,(False,))
-        self.assertEqual(popup.get_window.return_value.set_cursor.call_args.args,(None,))
-
-    def test_escape_and_destroy_cancel_drag_and_clean_timers(self):
+    def test_escape_and_destroy_do_not_run_drag_cleanup(self):
         gdk=SimpleNamespace(keyval_name=lambda key:key,ModifierType=SimpleNamespace(CONTROL_MASK=4))
         glib=SimpleNamespace(source_remove=Mock())
         ns=methods('card.py','Card',['key_press','destroyed'],dict(Gdk=gdk,GLib=glib))
         host=SimpleNamespace(app=Mock(),alive=True,emoji_dialog=Mock(),history_timer=3,geometry_timer=4)
         self.assertFalse(ns['key_press'](host,None,SimpleNamespace(keyval='Escape',state=0)))
-        host.app.end_note_drag.assert_called_once_with(False)
         ns['destroyed'](host)
         self.assertFalse(host.alive);host.emoji_dialog.destroy.assert_called_once()
-        host.app.end_note_drag.assert_called_with(False,host)
         self.assertEqual([call.args[0] for call in glib.source_remove.call_args_list],[3,4])
         self.assertEqual((host.history_timer,host.geometry_timer),(0,0))
-
-    def test_native_wayland_does_not_poll_unsupported_root_coordinates(self):
-        display=SimpleNamespace(__gtype__=SimpleNamespace(name='GdkWaylandDisplay'))
-        gdk=SimpleNamespace(Display=SimpleNamespace(get_default=lambda:display))
-        ns=methods('postits.py','Postits',['begin_note_drag'],dict(Gdk=gdk,ui=ui))
-        host=SimpleNamespace(end_note_drag=Mock());card=SimpleNamespace(status=Mock())
-        self.assertFalse(ns['begin_note_drag'](host,card))
-        host.end_note_drag.assert_called_once_with(False);card.status.show.assert_called_once()
-        self.assertFalse(hasattr(host,'drag_timer'))
 
     def test_native_emoji_uses_roomy_transient_root_and_restores_saved_cursor(self):
         dialog=Mock();signals={};dialog.connect.side_effect=lambda name,fn:signals.update({name:fn})

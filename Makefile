@@ -6,6 +6,7 @@ APPDIR = $(DESTDIR)$(PREFIX)/share/orbitz-sticky-notes
 install:
 	install -d "$(APPDIR)/sticky-notes" "$(APPDIR)/i18n"
 	install -m644 sticky-notes/*.py "$(APPDIR)/sticky-notes/"
+	install -m644 sticky-notes/*.png "$(APPDIR)/sticky-notes/"
 	install -m644 i18n/*.py i18n/*.json "$(APPDIR)/i18n/"
 	install -Dm755 data/orbitz-sticky-notes "$(DESTDIR)$(PREFIX)/bin/orbitz-sticky-notes"
 	install -Dm644 data/io.orbitz.Postits.desktop "$(DESTDIR)$(PREFIX)/share/applications/io.orbitz.Postits.desktop"

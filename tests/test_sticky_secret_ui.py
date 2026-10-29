@@ -16,11 +16,11 @@ class SecretUiTests(TestCase):
         self.glib=SimpleNamespace(get_monotonic_time=lambda:self.now,timeout_add=timeout,source_remove=lambda ident:self.callbacks.pop(ident,None))
         self.gdk=SimpleNamespace(CrossingMode=SimpleNamespace(NORMAL=0),NotifyType=SimpleNamespace(INFERIOR=2))
         tree=ast.parse((ROOT/'sticky-notes/card.py').read_text());cls=next(n for n in tree.body if isinstance(n,ast.ClassDef) and n.name=='Card')
-        names={'cancel_secret_timer','secret_activity','secret_enter','secret_leave','secret_tick','lock_secret','unlock_secret','toggle_secret','delete_note','authenticate_secret','show_secret_settings'}
+        names={'cancel_secret_timer','secret_activity','secret_enter','secret_leave','secret_tick','lock_secret','unlock_secret','toggle_secret','delete_note','authenticate_secret','show_secret_settings','sync_secret_menu_actions','authorize_secret_edit','set_property_value','restore_size','hide_note','close_requested'}
         ns=dict(GLib=self.glib,Gdk=self.gdk,ui=ui,sync_title_placeholder=Mock())
         exec(compile(ast.Module(body=[n for n in cls.body if isinstance(n,ast.FunctionDef) and n.name in names],type_ignores=[]),'card.py','exec'),ns)
         host=SimpleNamespace(alive=True,note={'id':'synthetic','secret':int(secret)},revision=4,secret_locked=False,secret_timer=0,secret_counting=False,secret_deadline=0,
-            status=Mock(),secret_stack=Mock(),title_field=Mock(),title_entry=Mock(),title_placeholder=Mock(),text=Mock(),unlock_button=Mock(),flush=Mock(return_value=True),clear_link_hover=Mock(),emoji_dialog=None,
+            status=Mock(),secret_stack=Mock(),scroll=Mock(),title_field=Mock(),title_entry=Mock(),title_placeholder=Mock(),text=Mock(),unlock_button=Mock(),flush=Mock(return_value=True),clear_link_hover=Mock(),apply_color=Mock(),set_keep_above=Mock(),emoji_dialog=None,attachment_preview_cache={},
             auth_dialog=None,settings_dialog=None,secret_items=[],secret_syncing=False,app=SimpleNamespace(store=Mock(),get_windows=lambda:[]),get_visible=lambda:True,
             error=Mock(),destroy=Mock(),get_allocated_width=lambda:310,get_allocated_height=lambda:300)
         self.window=object();host.get_window=lambda:self.window
@@ -63,6 +63,160 @@ class SecretUiTests(TestCase):
         host.unlock_secret();self.assertTrue(host.secret_locked)
         host.authenticate_secret.return_value=True;host.unlock_secret();self.assertFalse(host.secret_locked)
         host.secret_stack.set_visible_child_name.assert_called_with('editor');host.title_field.show_all.assert_called_once();host.text.grab_focus.assert_called_once()
+
+    def test_locked_secret_rejects_property_change_when_pin_is_cancelled(self):
+        host=self.host();host.secret_locked=True;host.authenticate_secret=Mock(return_value=False)
+        self.assertFalse(host.set_property_value(color='#abcdef'))
+        host.authenticate_secret.assert_called_once();host.app.store.properties.assert_not_called()
+
+    def test_locked_secret_authenticates_before_changing_color_or_window_order(self):
+        host=self.host();host.secret_locked=True;host.note['above']=0
+        host.authenticate_secret=Mock(return_value=True);host.app.store.properties.return_value=None
+        self.assertTrue(host.set_property_value(color='#abcdef'))
+        host.authenticate_secret.assert_called_once()
+        host.app.store.properties.assert_called_once_with('synthetic',color='#abcdef')
+        host.apply_color.assert_called_once();host.set_keep_above.assert_called_once_with(False)
+        second=self.host();second.secret_locked=True;second.note['above']=0;second.authenticate_secret=Mock(return_value=True)
+        second.set_property_value(above=1)
+        second.app.store.properties.assert_called_once_with('synthetic',above=1)
+        second.authenticate_secret.assert_called_once()
+
+    def test_locked_secret_menu_controls_are_disabled(self):
+        host=self.host();host.secret_locked=True
+        actions=[Mock() for _ in range(5)];host.secret_edit_menu_items=actions
+        host.sync_secret_menu_actions()
+        for action in actions:action.set_sensitive.assert_called_once_with(False)
+
+    def test_locked_secret_editor_callbacks_cannot_save_body_or_title(self):
+        host=self.host()
+        tree=ast.parse((ROOT/'sticky-notes/card.py').read_text());cls=next(n for n in tree.body if isinstance(n,ast.ClassDef) and n.name=='Card')
+        names={'changed','document_changed','title_changed','flush'}
+        namespace=dict(GLib=self.glib,sync_title_placeholder=Mock(),decode_document=lambda value:(value,[]))
+        exec(compile(ast.Module(body=[n for n in cls.body if isinstance(n,ast.FunctionDef) and n.name in names],type_ignores=[]),'card.py','exec'),namespace)
+        host.secret_locked=True;host.loading=False;host.buffer=Mock();host.saved='original';host.saved_title='original title'
+        host.dirty=True;host.title_dirty=True;host.title_entry=Mock();host.title_placeholder=Mock();host.value=Mock(return_value='tampered')
+        host.restore_document=Mock();host.document_changed=MethodType(namespace['document_changed'],host)
+        namespace['changed'](host)
+        host.restore_document.assert_called_once_with('original');self.assertFalse(host.dirty)
+        host.title_entry.get_text.return_value='tampered title';namespace['title_changed'](host)
+        host.title_entry.set_text.assert_called_once_with('original title');self.assertFalse(host.title_dirty)
+        self.assertTrue(namespace['flush'](host));host.app.store.text.assert_not_called();host.app.store.title.assert_not_called()
+
+    def test_lock_clears_old_status_before_showing_lock_save_error(self):
+        host=self.host();host.status.reset_mock();host.get_visible=lambda:False
+        host.lock_secret()
+        host.status.set_text.assert_any_call('')
+        host.status.hide.assert_called()
+
+    def test_hiding_secret_note_locks_synchronously_before_it_is_hidden(self):
+        host=self.host();host.hide=Mock()
+        calls=[]
+        host.lock_secret=Mock(side_effect=lambda:calls.append('lock'))
+        host.flush=Mock(side_effect=lambda:calls.append('flush') or True)
+        host.hide.side_effect=lambda:calls.append('hide')
+        self.assertTrue(host.hide_note())
+        self.assertEqual(calls,['flush','lock','hide'])
+        host.flush.side_effect=None;host.flush.return_value=False;calls.clear();host.lock_secret.reset_mock();host.hide.reset_mock()
+        self.assertFalse(host.hide_note());self.assertEqual(calls,[])
+        host.lock_secret.assert_not_called();host.hide.assert_not_called()
+
+    def test_window_close_uses_the_same_secret_lock_path(self):
+        host=self.host();host.hide_note=Mock(return_value=True)
+        self.assertTrue(host.close_requested())
+        host.hide_note.assert_called_once_with()
+
+    def test_reopening_a_hidden_secret_window_relocks_before_showing(self):
+        tree=ast.parse((ROOT/'sticky-notes/postits.py').read_text());cls=next(n for n in tree.body if isinstance(n,ast.ClassDef) and n.name=='Postits')
+        node=next(n for n in cls.body if isinstance(n,ast.FunctionDef) and n.name=='activate_cards')
+        namespace={};exec(compile(ast.Module(body=[node],type_ignores=[]),'postits.py','exec'),namespace)
+        events=[]
+        hidden=SimpleNamespace(note={'secret':1},get_visible=lambda:False,
+            lock_secret=lambda:events.append('lock'),show=lambda:events.append('show'),present=lambda:events.append('present'))
+        visible=SimpleNamespace(note={'secret':1},get_visible=lambda:True,
+            lock_secret=Mock(),show=Mock(),present=Mock())
+        app=SimpleNamespace(store=Mock(),get_windows=lambda:[hidden,visible])
+        namespace['activate_cards'](app)
+        self.assertEqual(events,['lock','show','present'])
+        visible.lock_secret.assert_not_called()
+        visible.show.assert_called_once();visible.present.assert_called_once()
+
+    def test_locked_secret_screen_has_only_an_icon_unlock_control(self):
+        source=(ROOT/'sticky-notes/card.py').read_text()
+        self.assertIn("lock_image=secret_lock_icon()",source)
+        self.assertIn("self.unlock_button=Gtk.EventBox()",source)
+        self.assertIn("self.unlock_button.add(lock_image)",source)
+        self.assertIn("secret-pin.png",source)
+        self.assertIn("install -m644 sticky-notes/*.png",(ROOT/'Makefile').read_text())
+        self.assertNotIn("locked.pack_start(ui.widget(Gtk.Label,label=ui.msg('sticky.secret_note'))",source)
+        self.assertNotIn("Gtk.Button,label=ui.msg('sticky.unlock')",source)
+
+    def test_initial_secret_lock_survives_recursive_window_show_all(self):
+        source=(ROOT/'sticky-notes/card.py').read_text()
+        init=source[source.index('class Card(Gtk.ApplicationWindow):'):source.index('    def value(self):')]
+        outer_show=init.index('overlay.show_all()')
+        lock_select=init.index("self.secret_stack.set_visible_child_name('locked')")
+        map_window=init.index('self.show()')
+        self.assertLess(outer_show,lock_select);self.assertLess(lock_select,map_window)
+        self.assertNotIn('outer.show_all()',init)
+        self.assertNotIn('self.scroll.set_no_show_all',init)
+        self.assertIn('self.attachments_box.set_no_show_all(True);self.attachments_box.hide()',init)
+        unlock=source[source.index('    def unlock_secret(self):'):source.index('    def pin_entry(')]
+        self.assertIn("self.secret_stack.set_visible_child_name('editor')",unlock)
+        self.assertIn('self.scroll.show_all()',unlock)
+        self.assertIn('self.attachments_box.set_no_show_all(False)',unlock)
+
+    def test_disabling_secret_restores_stack_page_and_attachments_after_auth(self):
+        source=(ROOT/'sticky-notes/card.py').read_text()
+        cls=next(n for n in ast.parse(source).body if isinstance(n,ast.ClassDef) and n.name=='Card')
+        method=next(n for n in cls.body if isinstance(n,ast.FunctionDef) and n.name=='toggle_secret')
+        namespace={'sync_title_placeholder':Mock()};exec(compile(ast.Module(body=[method],type_ignores=[]),'card.py','exec'),namespace)
+        host=self.host();host.secret_locked=True;host.note['secret']=1
+        host.authenticate_secret=Mock(return_value=True);host.secret_activity=Mock()
+        host.sync_secret_menu_actions=Mock();host.refresh_attachments=Mock();host.secret_items=[]
+        host.attachments_box=Mock();host.app.store.set_secret.return_value=5
+        check=Mock();check.get_active.return_value=False
+        namespace['toggle_secret'](host,check)
+        self.assertEqual(host.note['secret'],0);self.assertFalse(host.secret_locked)
+        host.scroll.set_no_show_all.assert_not_called()
+        host.secret_stack.set_visible_child_name.assert_called_with('editor')
+        host.scroll.show_all.assert_called_once_with()
+        host.attachments_box.set_no_show_all.assert_called_once_with(False)
+        host.refresh_attachments.assert_called_once_with()
+
+    def test_secret_pin_icon_loads_bundled_image(self):
+        tree=ast.parse((ROOT/'sticky-notes/card.py').read_text())
+        node=next(n for n in tree.body if isinstance(n,ast.FunctionDef) and n.name=='secret_lock_icon')
+        gtk=SimpleNamespace(Image=SimpleNamespace(new_from_file=Mock(return_value='image')))
+        namespace=dict(Gtk=gtk,Path=Path,__file__=str(ROOT/'sticky-notes/card.py'))
+        exec(compile(ast.Module(body=[node],type_ignores=[]),'card.py','exec'),namespace)
+        namespace['secret_lock_icon']()
+        gtk.Image.new_from_file.assert_called_once_with(str(ROOT/'sticky-notes/secret-pin.png'))
+        import struct
+        icon=(ROOT/'sticky-notes/secret-pin.png').read_bytes()
+        self.assertEqual(icon[:8],b'\x89PNG\r\n\x1a\n')
+        self.assertEqual(struct.unpack('>II',icon[16:24]),(64,64))
+        self.assertEqual(icon[25],6)  # RGBA transparency, with no baked background.
+
+    def test_unlock_control_is_not_a_themable_or_focusable_button(self):
+        source=(ROOT/'sticky-notes/card.py').read_text()
+        self.assertIn('self.unlock_button=Gtk.EventBox();self.unlock_button.set_visible_window(False)',source)
+        self.assertIn('self.unlock_button.set_can_focus(False)',source)
+        self.assertNotIn('sticky-secret-unlock',source)
+        self.assertNotIn('unlock_button.grab_focus()',source)
+
+    def test_unlock_control_sets_pointer_only_while_hovered_and_click_opens_pin(self):
+        tree=ast.parse((ROOT/'sticky-notes/card.py').read_text());cls=next(n for n in tree.body if isinstance(n,ast.ClassDef) and n.name=='Card')
+        names={'unlock_pointer_enter','unlock_pointer_leave','unlock_pointer_click'}
+        namespace=dict(Gdk=SimpleNamespace(Cursor=SimpleNamespace(new_from_name=Mock(return_value='pointer'))))
+        exec(compile(ast.Module(body=[n for n in cls.body if isinstance(n,ast.FunctionDef) and n.name in names],type_ignores=[]),'card.py','exec'),namespace)
+        window=Mock();host=SimpleNamespace(get_window=Mock(return_value=window),get_display=Mock(return_value='display'))
+        self.assertFalse(namespace['unlock_pointer_enter'](host));window.set_cursor.assert_called_once_with('pointer')
+        window.set_cursor.reset_mock()
+        self.assertFalse(namespace['unlock_pointer_leave'](host));window.set_cursor.assert_called_once_with(None)
+        host.unlock_secret=Mock()
+        self.assertTrue(namespace['unlock_pointer_click'](host,None,SimpleNamespace(button=1)));host.unlock_secret.assert_called_once_with()
+        host.unlock_secret.reset_mock()
+        self.assertTrue(namespace['unlock_pointer_click'](host,None,SimpleNamespace(button=3)));host.unlock_secret.assert_not_called()
 
     def test_every_delete_of_secret_requires_fresh_pin_even_when_revealed(self):
         host=self.host();host.authenticate_secret=Mock(return_value=False)
@@ -136,7 +290,7 @@ class SecretUiTests(TestCase):
 
     def test_destruction_removes_timer_and_closes_auth_and_settings(self):
         host=self.host();self.leave(host)
-        host.auth_dialog=Mock();host.settings_dialog=Mock();host.app.end_note_drag=Mock()
+        host.auth_dialog=Mock();host.settings_dialog=Mock()
         host.history_timer=0;host.geometry_timer=0
         tree=ast.parse((ROOT/'sticky-notes/card.py').read_text());cls=next(n for n in tree.body if isinstance(n,ast.ClassDef) and n.name=='Card')
         node=next(n for n in cls.body if isinstance(n,ast.FunctionDef) and n.name=='destroyed')
