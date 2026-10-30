@@ -56,7 +56,15 @@ class Postits(Gtk.Application):
         self.screen=Gdk.Screen.get_default()
         self.monitor_signal=self.screen.connect('monitors-changed',self.monitors_changed)
         self.backup_timer=GLib.timeout_add_seconds(3600,self.backup_store)
-        self.term_signal=GLib.unix_signal_add(GLib.PRIORITY_DEFAULT,signal.SIGTERM,lambda:self.safe_quit() or False)
+        self.term_signal=GLib.unix_signal_add(GLib.PRIORITY_DEFAULT,signal.SIGTERM,self.terminate_signal)
+
+    def terminate_signal(self):
+        # GLib removes a signal source when its callback returns False. Clear
+        # the ID before safe_quit emits the application's shutdown signal so
+        # shutdown_cards does not try to remove the same source a second time.
+        self.term_signal=0
+        self.safe_quit()
+        return False
 
     def backup_store(self):
         try:self.store.backup()
@@ -170,7 +178,8 @@ class Postits(Gtk.Application):
     def shutdown_cards(self,*_):
         if hasattr(self,'screen'):self.screen.disconnect(self.monitor_signal)
         if self.monitor_timer:GLib.source_remove(self.monitor_timer)
-        if hasattr(self,'term_signal'):GLib.source_remove(self.term_signal)
+        if getattr(self,'term_signal',0):GLib.source_remove(self.term_signal)
+        self.term_signal=0
         if hasattr(self,'backup_timer'):GLib.source_remove(self.backup_timer)
         for card in list(self.get_windows()):
             if hasattr(card,'save_geometry'):card.save_geometry()

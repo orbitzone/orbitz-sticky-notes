@@ -11,5 +11,10 @@
   <url type="bugtracker">https://github.com/orbitzone/orbitz-sticky-notes/issues</url>
   <provides><binary>orbitz-sticky-notes</binary></provides>
   <content_rating type="oars-1.1"/>
-  <releases><release version="0.1.0" date="2026-10-27"/></releases>
+  <releases>
+    <release version="0.2.0~beta1" date="2026-10-30" type="development">
+      <description><p>First public beta with persistent note positions, a single-window Sticky Code workflow, improved resizing for long content, attachment previews, secret-note locking, archived and hidden-note recovery, and per-note opacity controls.</p></description>
+    </release>
+    <release version="0.1.0" date="2026-10-27"/>
+  </releases>
 </component>

@@ -4,7 +4,7 @@
 
 Create a note in seconds, give it a title, choose a color, and place it where it helps your workflow. Switch the same note to **Sticky Code** when you want a clean dark editor for a snippet. With great features and details that matter, it is an awesome, productive companion for daily tasks, planning, quick references, and development work—useful tools that make your workflow feel amazing without getting in the way.
 
-> **Preview release:** Orbitz Sticky Notes is currently distributed as an x86_64 Flatpak preview. Please review the compatibility and privacy notes below before installing. There is no Flathub listing or automatic update channel yet.
+> **Beta release — v0.2.0-beta.1:** Orbitz Sticky Notes is available as an x86_64 Flatpak for Ubuntu 22.04 and 24.04. Review the compatibility and privacy notes below before installing. There is no Flathub listing or automatic update channel yet.
 
 ## Useful features
 
@@ -17,12 +17,12 @@ Create a note in seconds, give it a title, choose a color, and place it where it
 
 Details that matter: closing a note hides it; it does not delete it. Permanent deletion is a separate menu action. Resizing changes the available text area while the font stays the same. Long content scrolls within the note or code editor.
 
-## Install the Linux preview
+## Install the Linux beta
 
-The current preview package targets **x86_64** and the GNOME 49 Flatpak runtime. It uses GTK 3 with the X11 socket; a Wayland session therefore needs XWayland. Window management, portal, and accessibility workflows still need desktop-specific testing. The app does not depend on a particular GNOME Shell extension version, but window placement and “always on top” behavior vary by desktop environment and window manager.
+The beta package targets **x86_64** and the GNOME 49 Flatpak runtime. Ubuntu 22.04 and 24.04 are the supported beta targets. It uses GTK 3 with the X11 socket; a Wayland session therefore needs XWayland. Interactive workflows have been checked on Ubuntu 24.04 with GNOME; Ubuntu 22.04 has been checked for clean installation, upgrade, data migration, and startup under a virtual display. Email handoff, window management, and accessibility can vary with the installed desktop services and still need broader testing.
 
 1. Install Flatpak for your distribution using the [Flatpak setup guide](https://flatpak.org/setup/).
-2. Download `orbitz-sticky-notes-x86_64.flatpak` from the [v0.1.0 preview release](https://github.com/orbitzone/orbitz-sticky-notes/releases/tag/v0.1.0).
+2. Download `orbitz-sticky-notes-x86_64.flatpak` from the [v0.2.0-beta.1 release](https://github.com/orbitzone/orbitz-sticky-notes/releases/tag/v0.2.0-beta.1).
 3. In the download folder, install and launch it:
 
 ```sh
@@ -58,12 +58,12 @@ Attachments remain in their original folders. Orbitz stores their paths and name
 
 ## Compatibility and current limits
 
-- Linux desktop with Flatpak, the GNOME 49 runtime, and an X11 display; a Wayland session needs XWayland.
-- The published preview is x86_64. ARM builds and other architectures have not been validated.
+- Ubuntu 22.04 or 24.04, x86_64, Flatpak, the GNOME 49 runtime, and an X11 display; a Wayland session needs XWayland.
+- The published beta is x86_64. ARM builds and other architectures have not been validated.
 - Native Wayland-only sessions without XWayland are not supported by this build.
 - Window positions, workspace behavior, and always-on-top support depend on the desktop environment.
-- Automated CI checks and GTK tests run in a virtual display; they are not a substitute for visual testing on GNOME, KDE, and Xfce hardware setups.
-- Email handoff depends on the desktop portal and installed email client. Check the release notes for the latest tested combinations.
+- Ubuntu 22.04 package install, upgrade, data migration, and startup were exercised in a clean VM. Targeted visual interactions were checked on Ubuntu 24.04 GNOME; other desktop environments have not been certified.
+- Email handoff depends on the desktop portal and installed email client. The beta notes list the client combinations actually exercised.
 
 ## Keyboard shortcuts
 
@@ -98,6 +98,6 @@ Orbitz Sticky Notes is developed by **Felipe Santiago / orbitzone** and licensed
 
 - [Source code](https://github.com/orbitzone/orbitz-sticky-notes)
 - [Issues and feature requests](https://github.com/orbitzone/orbitz-sticky-notes/issues)
-- [Preview downloads](https://github.com/orbitzone/orbitz-sticky-notes/releases)
+- [Beta downloads](https://github.com/orbitzone/orbitz-sticky-notes/releases)
 
 Have an idea that would make your Linux workflow more useful? Open an issue with your desktop environment, Flatpak version, and steps to reproduce the behavior.
