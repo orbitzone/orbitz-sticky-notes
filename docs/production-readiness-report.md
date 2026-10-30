@@ -120,3 +120,22 @@ Foi continuada a validação do bundle `io.orbitz.Postits` em Ubuntu 24.04.4 LTS
 O resize por alça própria do Sticky Code não foi confirmado por automação gráfica; o tamanho mudou via atalho de redimensionamento do GNOME/WM, que não prova o funcionamento do handle personalizado. A composição de e-mail chegou ao handler de `mailto:`; a VM não tinha provedor associado e Firefox interceptou o protocolo. Thunderbird foi instalado só na VM e aberto como handler de sistema, mas sua configuração inicial parou antes do editor de mensagem. Nenhum e-mail foi enviado e os anexos não foram verificados dentro do compositor. As capturas funcionais e seu índice estão em [`tests/evidence/ubuntu-24.04-gnome-46-2026-10-30/`](../tests/evidence/ubuntu-24.04-gnome-46-2026-10-30/).
 
 **Decisão permanece: não recomendar produção estável.** A execução fornece evidência funcional parcial na combinação Ubuntu 24.04/GNOME 46, não certificação de outros ambientes. Restam resize pelo handle do Sticky Code, abertura visual real de rascunho com anexos pelo portal após perfil Thunderbird configurado, validação manual de leitores de tela, outros compositores/distribuições, testes de todos os comandos de menu e benchmark ponta a ponta com input físico/compositor. A instalação Flatpak deste processo de QA e os anexos/note fixtures eram exclusivos da VM; não se alterou a instalação do host.
+
+## Beta 0.2.0 — validação do artefato final — 30/10/2026
+
+**Commit validado:** `19a7e338108e907e61fb8a694d2497d8830b3f95` (`19a7e33`). **CI:** workflow `41110902730` verde para esse commit. **Bundle:** arquivo Flatpak de 19.626.056 bytes, SHA-256 `5f6c7160e02578e5a01e6c520ad409ca10633c48dcfb5a19727b958fa3bb3416`; o mesmo arquivo foi usado nas VMs. A suíte repetida localmente passou com 146 testes; dois testes de geometria/foco GTK foram pulados porque esta execução não tinha display. A CI do commit passou separadamente.
+
+### Evidência por plataforma
+
+| Ambiente | Validado no bundle da CI | Limites |
+| --- | --- | --- |
+| Ubuntu 22.04.5 LTS, VM limpa, Flatpak 1.12.7 | Atualização de 0.1.0; conteúdo, título, cor, posição, tamanho e referência do anexo sintético permaneceram no SQLite após migração; arquivo anexado continuou presente. O processo abriu e permaneceu ativo sob Xvfb. | VM sem GNOME/display interativo; fluxos visuais não foram homologados aqui. |
+| Ubuntu 24.04.4 LTS, GNOME Shell 46, Flatpak 1.14.6 | Atualização do bundle anterior; persistência do fixture; abertura do Sticky Code; resize pelo handle próprio para menor e maior com 200 linhas; Settings, Shortcuts, seletor nativo de arquivos; seleção de anexo; invocação do handler Thunderbird. Opacidade foi conferida nas vistas de nota e code. | Um conjunto de comandos do menu ainda não foi acionado individualmente; demais compositores e sessões não foram testados. |
+
+As capturas do resize feitas com o bundle exato estão em [`tests/evidence/ubuntu-24.04-gnome-46-beta.1-2026-10-30/`](../tests/evidence/ubuntu-24.04-gnome-46-beta.1-2026-10-30/). A rodada anterior de evidência visual continua separada e mantém seu próprio checksum/limitações.
+
+### Email, conclusão beta e pendências
+
+O formulário de email aceitou o endereço de teste e Enter acionou o cliente Thunderbird instalado na VM. O Thunderbird abriu o assistente de primeira execução, e não o editor de mensagem; assim, o conteúdo e o anexo do compositor não foram verificados visualmente. Os testes automatizados confirmam a criação do MIME X-Unsent com corpo e anexo sintético, mas não substituem a validação ponta a ponta no cliente configurado. Nenhuma mensagem foi enviada.
+
+O bundle pode ser publicado como **beta para Ubuntu 22.04 e 24.04 x86_64**, com esses limites explícitos nas notas. Isso não equivale a recomendação de produção estável: fluxo visual Thunderbird com anexo, todos os comandos do menu, Orca/AT-SPI, Wayland nativo, outros ambientes gráficos e arquiteturas permanecem fora da cobertura demonstrada. As VMs de QA foram desligadas e os encaminhamentos SSH temporários estavam fechados ao final desta rodada; instalações e dados pessoais do host não foram alterados.
