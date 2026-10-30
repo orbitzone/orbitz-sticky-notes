@@ -12,6 +12,11 @@ gi.require_version('GdkPixbuf','2.0')
 gi.require_version('Gtk','3.0')
 from gi.repository import Gtk,GLib,Gdk,Gio,GdkPixbuf,Pango
 try:
+    gi.require_version('GtkSource','4')
+    from gi.repository import GtkSource
+except (ImportError,ValueError):
+    GtkSource=None
+try:
     gi.require_version('Poppler','0.18')
     from gi.repository import Poppler
 except (ImportError,ValueError):
@@ -30,6 +35,13 @@ PREVIEW_MAX_BYTES=20*1024*1024
 PREVIEW_WIDTH=280
 PREVIEW_HEIGHT=180
 NOTE_CORNER_RADIUS=10
+CODE_LANGUAGES=(
+    ('python','Python'),('javascript','JavaScript'),('typescript','TypeScript'),
+    ('json','JSON'),('html','HTML'),('css','CSS'),('c','C'),('cpp','C++'),
+    ('rust','Rust'),('go','Go'),('java','Java'),('sql','SQL'),('sh','Shell'),
+    ('markdown','Markdown'),('plain','Plain text'),
+)
+CODE_SOURCE_IDS={'javascript':'js'}
 
 
 def rounded_note_region(width,height,radius=NOTE_CORNER_RADIUS):
@@ -96,18 +108,29 @@ def editor_scroll(text):
     return scroll,scrollbar
 
 
-def resize_grip(callback):
-    grip=Gtk.EventBox();grip.set_visible_window(True);grip.set_above_child(True)
+def resize_grip(callback,label=None):
+    grip=Gtk.Button();grip.set_relief(Gtk.ReliefStyle.NONE);grip.set_focus_on_click(False)
+    grip.set_can_focus(True)
     grip.set_size_request(28,28)
     grip.set_halign(Gtk.Align.END);grip.set_valign(Gtk.Align.END)
     grip.set_margin_end(2);grip.set_margin_bottom(2)
     icon=ui.widget(Gtk.Label,label='◢');icon.set_halign(Gtk.Align.END);icon.set_valign(Gtk.Align.END)
     icon.set_margin_end(4);icon.set_margin_bottom(4);grip.add(icon)
-    ui.call(grip.get_accessible(),'set_name',ui.msg('sticky.resize'))
+    ui.call(grip.get_accessible(),'set_name',label or ui.msg('sticky.resize'))
     grip.connect('button-press-event',callback)
     grip.connect('realize',lambda widget:widget.get_window().set_cursor(
         Gdk.Cursor.new_from_name(widget.get_display(),'se-resize')))
     return grip
+
+
+def resize_edge(callback,edge,cursor_name,*,width=-1,height=-1,halign=Gtk.Align.FILL,valign=Gtk.Align.FILL):
+    """Add an invisible native resize target along an undecorated window edge."""
+    handle=Gtk.EventBox();handle.set_visible_window(False);handle.set_above_child(True)
+    handle.set_size_request(width,height);handle.set_halign(halign);handle.set_valign(valign)
+    handle.connect('button-press-event',callback,edge)
+    handle.connect('realize',lambda widget:widget.get_window().set_cursor(
+        Gdk.Cursor.new_from_name(widget.get_display(),cursor_name)))
+    return handle
 
 
 def secret_lock_icon():
@@ -123,8 +146,11 @@ def sync_title_placeholder(entry,placeholder):
 class Card(Gtk.ApplicationWindow):
     def __init__(self,app,note):
         super().__init__(application=app,title=ui.tr('sticky.window_title'))
-        ui.set(self,'title',ui.msg('sticky.window_title'))
         note=dict(note)
+        self.code_mode=bool(note.get('code_mode',0))
+        self.code_language=note.get('code_language') or 'python'
+        safe_code_title=ui.msg('sticky.sticky_code') if note.get('secret') else (note.get('title') or ui.msg('sticky.sticky_code'))
+        ui.set(self,'title',ui.msg('sticky.code_window_title',title=safe_code_title) if self.code_mode else ui.msg('sticky.window_title'))
         display=Gdk.Display.get_default()
         for index in range(display.get_n_monitors()):
             monitor=display.get_monitor(index)
@@ -140,30 +166,44 @@ class Card(Gtk.ApplicationWindow):
         self.secret_counting=False;self.auth_dialog=None;self.settings_dialog=None;self.secret_items=[];self.secret_edit_menu_items=[];self.secret_syncing=False
         self.dirty=False;self.loading=False;self.history=[self.saved];self.index=0
         self.history_timer=0;self.geometry_timer=0;self.menu_pointer_timer=0;self.menu_buttons_down=0;self.alive=True;self.pending_restore=False
+        self.keyboard_geometry_mode=None;self.keyboard_geometry_previous_status=None
         self._rounded_shape_size=None
         # Keep the note grouped under the app icon in GNOME Dash so the
         # launcher shows its running indicator whenever a note is visible.
+        # Both note types use their own header. In code mode this avoids
+        # stacking a native titlebar over the custom editor header.
         self.set_decorated(False);self.set_skip_taskbar_hint(False)
-        self.set_default_size(note['width'],note['height']);self.set_size_request(220,160)
+        self.set_default_size(note['width'],note['height'])
+        minimum_width,minimum_height=(320,220) if self.code_mode else (180,120)
+        self.set_size_request(minimum_width,minimum_height)
+        # Tell the window manager the actual minimum explicitly. A child's
+        # natural requisition can otherwise leak into WM resize hints even
+        # when it lives inside a ScrolledWindow.
+        geometry=Gdk.Geometry();geometry.min_width=minimum_width;geometry.min_height=minimum_height
+        self.set_geometry_hints(None,geometry,Gdk.WindowHints.MIN_SIZE)
         self.set_focus_on_map(False);self.set_keep_above(bool(note['above']));self.stick()
         visual=self.get_screen().get_rgba_visual()
-        if visual:self.set_visual(visual)
+        if visual and not self.code_mode:self.set_visual(visual)
         self.css=Gtk.CssProvider()
         self.get_style_context().add_class('postit')
         self.get_style_context().add_provider(self.css,Gtk.STYLE_PROVIDER_PRIORITY_USER)
         self.connect('realize',self.update_rounded_shape)
         self.connect('size-allocate',self.update_rounded_shape)
-        outer=Gtk.Box(orientation=Gtk.Orientation.VERTICAL,spacing=12,margin=18)
+        outer=Gtk.Box(orientation=Gtk.Orientation.VERTICAL,spacing=0 if self.code_mode else 12,margin=0 if self.code_mode else 18)
+        if self.code_mode:outer.set_name('sticky-code-frame')
         outer.set_margin_top(0)
-        outer.set_margin_bottom(30)  # Keep the corner hit target clear of editable text.
+        outer.set_margin_bottom(0 if self.code_mode else 30)  # Keep the corner hit target clear of editable text.
         overlay=Gtk.Overlay();overlay.add(outer);self.add(overlay)
-        self.move_handle=Gtk.EventBox();self.move_handle.set_name('sticky-note-move-handle')
-        self.move_handle.set_size_request(-1,24);self.move_handle.set_visible_window(True)
-        ui.call(self.move_handle.get_accessible(),'set_name',ui.msg('sticky.move_note'))
+        self.move_handle=Gtk.Button();self.move_handle.set_name('sticky-note-move-handle')
+        self.move_handle.set_relief(Gtk.ReliefStyle.NONE);self.move_handle.set_focus_on_click(False)
+        self.move_handle.set_can_focus(True);self.move_handle.set_size_request(-1,16 if self.code_mode else 24)
+        ui.call(self.move_handle.get_accessible(),'set_name',ui.msg('sticky.move_window' if self.code_mode else 'sticky.move_note'))
+        ui.call(self.move_handle.get_accessible(),'set_description',ui.msg('sticky.keyboard_move_help'))
         self.move_handle.add_events(Gdk.EventMask.BUTTON_PRESS_MASK)
         self.move_handle.connect('realize',lambda widget:widget.get_window().set_cursor(
             Gdk.Cursor.new_from_name(widget.get_display(),'move')))
         self.move_handle.connect('button-press-event',self.header_drag_press)
+        self.move_handle.connect('key-press-event',self.keyboard_geometry_key_press,'move')
         header_area=Gtk.Box(orientation=Gtk.Orientation.VERTICAL,spacing=0)
         header_area.pack_start(self.move_handle,False,False,0)
         transfer_target=Gtk.TargetEntry.new('application/vnd.portal.filetransfer',Gtk.TargetFlags.OTHER_APP,1)
@@ -174,8 +214,10 @@ class Card(Gtk.ApplicationWindow):
         self.menu_button.set_direction(Gtk.ArrowType.DOWN)
         self.menu_button.set_size_request(22,22)
         self.menu_button.get_style_context().add_class('sticky-menu-button')
+        if self.code_mode:self.menu_button.get_style_context().add_class('sticky-code-menu')
         ui.call(self.menu_button.get_accessible(),'set_name',ui.msg('sticky.note_menu'))
         heading_row=Gtk.Box(spacing=8)
+        if self.code_mode:heading_row.set_name('sticky-code-header')
         heading_row.pack_start(header,False,False,0)
         self.secret_badge=Gtk.DrawingArea()
         self.secret_badge.set_name('sticky-secret-lock')
@@ -204,50 +246,78 @@ class Card(Gtk.ApplicationWindow):
         self.title_entry.connect('focus-out-event',self.focus_out)
         heading_row.pack_start(title_field,True,True,0)
         self.close_button=Gtk.Button.new_from_icon_name('window-close-symbolic',Gtk.IconSize.MENU)
+        self.close_button.set_name('sticky-code-close' if self.code_mode else 'sticky-note-close')
         self.close_button.set_relief(Gtk.ReliefStyle.NONE)
         ui.call(self.close_button.get_accessible(),'set_name',ui.msg('sticky.close'))
         self.close_button.connect('clicked',lambda *_:self.close_requested())
         heading_row.pack_end(self.close_button,False,False,0)
-        header_area.pack_start(heading_row,False,False,0)
+        heading_region=heading_row
+        if self.code_mode:heading_region=self.wrap_code_drag_region(heading_row)
+        header_area.pack_start(heading_region,False,False,0)
         outer.pack_start(header_area,False,False,0)
         header.add(self.menu_button)
         # Keep right-click access on the header, but the header no longer starts
         # a custom drag; GNOME's Super+drag remains available everywhere.
         header.add_events(Gdk.EventMask.BUTTON_PRESS_MASK)
         header.connect('button-press-event',self.context_menu_press)
-        self.text=Gtk.TextView(wrap_mode=Gtk.WrapMode.WORD_CHAR)
+        self.text=GtkSource.View.new() if self.code_mode and GtkSource else Gtk.TextView(wrap_mode=Gtk.WrapMode.NONE if self.code_mode else Gtk.WrapMode.WORD_CHAR)
         self.text.set_name('sticky-note-text')
+        ui.call(self.text.get_accessible(),'set_name',ui.msg('sticky.code_editor' if self.code_mode else 'sticky.note_content'))
+        # Keep editor natural content size from imposing a window minimum.
+        # Long text/code stays in the scroll view while the note can shrink.
+        self.text.set_size_request(1,1);self.text.set_hexpand(True);self.text.set_vexpand(True)
+        if self.code_mode:
+            self.text.set_monospace(True)
+            self.text.set_left_margin(8);self.text.set_right_margin(8);self.text.set_top_margin(8);self.text.set_bottom_margin(8)
+            if GtkSource and isinstance(self.text,GtkSource.View):
+                self.text.set_show_line_numbers(True);self.text.set_auto_indent(True)
+                self.text.set_indent_width(4);self.text.set_tab_width(4);self.text.set_insert_spaces_instead_of_tabs(True)
+                self.text.set_highlight_current_line(True);self.text.set_show_right_margin(False)
         # External file drops attach files without replacing editable text.
         self.text.drag_dest_set(Gtk.DestDefaults.ALL,file_targets,Gdk.DragAction.COPY)
         self.text.connect('drag-data-received',self.file_drop_received)
-        self.buffer=self.text.get_buffer()
+        self.buffer=GtkSource.Buffer() if self.code_mode and GtkSource else self.text.get_buffer()
+        if self.code_mode and GtkSource:
+            self.text.set_buffer(self.buffer)
+            self.configure_code_buffer()
         self.style_tags={
             'bold':self.buffer.create_tag('text-bold',weight=Pango.Weight.BOLD),
             'italic':self.buffer.create_tag('text-italic',style=Pango.Style.ITALIC),
             'underline':self.buffer.create_tag('text-underline',underline=Pango.Underline.SINGLE),
         }
-        self.restore_document(self.saved)
+        if self.code_mode:self.buffer.set_text(self.saved_plain)
+        else:self.restore_document(self.saved)
         self.link_tag=self.buffer.create_tag('ctrl-link',weight=Pango.Weight.BOLD)
         self.hover_link=None
         self.link_cursor=Gdk.Cursor.new_from_name(display,'pointer')
         self.edit_cursor=Gdk.Cursor.new_from_name(display,'text')
         self.scroll,self.scrollbar=editor_scroll(self.text);scroll=self.scroll
+        if self.code_mode:scroll.set_policy(Gtk.PolicyType.AUTOMATIC,Gtk.PolicyType.AUTOMATIC)
+        self.code_toolbar=None;self.code_status=None;self.code_language_combo=None
+        editor_content=scroll
+        if self.code_mode:
+            editor_content=Gtk.Box(orientation=Gtk.Orientation.VERTICAL,spacing=0)
+            self.code_toolbar=self.build_code_toolbar()
+            editor_content.pack_start(self.wrap_code_drag_region(self.code_toolbar),False,False,0)
+            editor_content.pack_start(scroll,True,True,0)
         self.secret_stack=Gtk.Stack();self.secret_stack.set_transition_type(Gtk.StackTransitionType.NONE)
         self.secret_stack.set_hhomogeneous(False);self.secret_stack.set_vhomogeneous(False)
-        self.secret_stack.add_named(scroll,'editor')
+        self.secret_stack.add_named(editor_content,'editor')
         locked=Gtk.Box(orientation=Gtk.Orientation.VERTICAL,spacing=6)
         locked.set_halign(Gtk.Align.CENTER);locked.set_valign(Gtk.Align.CENTER)
         lock_image=secret_lock_icon()
-        # An EventBox avoids the theme-provided GtkButton hover/focus frame.
-        # It is deliberately not focusable: the only hover cue is the pointer.
-        self.unlock_button=Gtk.EventBox();self.unlock_button.set_visible_window(False)
-        self.unlock_button.set_can_focus(False);self.unlock_button.set_size_request(88,88)
+        # A real button exposes the native push-button role and keyboard
+        # activation; focus styling is distinct from transparent mouse hover.
+        self.unlock_button=Gtk.Button();self.unlock_button.set_name('sticky-secret-unlock-control')
+        self.unlock_button.set_relief(Gtk.ReliefStyle.NONE);self.unlock_button.set_focus_on_click(False)
+        self.unlock_button.set_can_focus(True);self.unlock_button.set_size_request(88,88)
         self.unlock_button.add(lock_image)
         ui.call(self.unlock_button.get_accessible(),'set_name',ui.msg('sticky.secret_unlock_accessible'))
-        self.unlock_button.add_events(Gdk.EventMask.ENTER_NOTIFY_MASK|Gdk.EventMask.LEAVE_NOTIFY_MASK|Gdk.EventMask.BUTTON_RELEASE_MASK)
+        ui.call(self.unlock_button.get_accessible(),'set_description',ui.msg('sticky.secret_unlock_keyboard_help'))
+        self.unlock_button.add_events(Gdk.EventMask.ENTER_NOTIFY_MASK|Gdk.EventMask.LEAVE_NOTIFY_MASK)
         self.unlock_button.connect('enter-notify-event',self.unlock_pointer_enter)
         self.unlock_button.connect('leave-notify-event',self.unlock_pointer_leave)
-        self.unlock_button.connect('button-release-event',self.unlock_pointer_click)
+        self.unlock_button.connect('clicked',self.unlock_pointer_click)
         locked.pack_start(self.unlock_button,False,False,0)
         self.secret_stack.add_named(locked,'locked');outer.pack_start(self.secret_stack,True,True,0)
         self.attachments_box=Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL,spacing=3)
@@ -255,7 +325,23 @@ class Card(Gtk.ApplicationWindow):
         self.refresh_attachments()
         self.status=ui.widget(Gtk.Label,xalign=0,wrap=True);self.status.set_no_show_all(True)
         outer.pack_start(self.status,False,False,0)
-        grip=resize_grip(self.resize_press)
+        # Undecorated windows have no compositor-provided resize border.
+        # Give both note templates resize targets on every side and corner.
+        handles=(
+            resize_edge(self.resize_edge_press,Gdk.WindowEdge.NORTH,'n-resize',height=5,valign=Gtk.Align.START),
+            resize_edge(self.resize_edge_press,Gdk.WindowEdge.SOUTH,'s-resize',height=5,valign=Gtk.Align.END),
+            resize_edge(self.resize_edge_press,Gdk.WindowEdge.WEST,'w-resize',width=5,halign=Gtk.Align.START),
+            resize_edge(self.resize_edge_press,Gdk.WindowEdge.EAST,'e-resize',width=5,halign=Gtk.Align.END),
+            resize_edge(self.resize_edge_press,Gdk.WindowEdge.NORTH_WEST,'nw-resize',width=12,height=12,halign=Gtk.Align.START,valign=Gtk.Align.START),
+            resize_edge(self.resize_edge_press,Gdk.WindowEdge.NORTH_EAST,'ne-resize',width=12,height=12,halign=Gtk.Align.END,valign=Gtk.Align.START),
+            resize_edge(self.resize_edge_press,Gdk.WindowEdge.SOUTH_WEST,'sw-resize',width=12,height=12,halign=Gtk.Align.START,valign=Gtk.Align.END),
+        )
+        for handle in handles:
+            overlay.add_overlay(handle);overlay.set_overlay_pass_through(handle,False)
+        grip=resize_grip(self.resize_press,ui.msg('sticky.resize_window' if self.code_mode else 'sticky.resize'))
+        grip.set_name('sticky-note-resize-grip')
+        grip.connect('key-press-event',self.keyboard_geometry_key_press,'resize')
+        ui.call(grip.get_accessible(),'set_description',ui.msg('sticky.keyboard_resize_help'))
         overlay.add_overlay(grip);overlay.set_overlay_pass_through(grip,False)
         self.apply_color()
         self.buffer.connect('changed',self.changed)
@@ -263,13 +349,14 @@ class Card(Gtk.ApplicationWindow):
         self.emoji_dialog=None
         self.text.connect('insert-emoji',self.insert_emoji)
         self.text.connect('populate-popup',self.populate_popup)
-        self.text.connect('button-press-event',self.text_press)
+        if not self.code_mode:self.text.connect('button-press-event',self.text_press)
         self.text.connect('key-press-event',self.text_format_key_press)
         self.text.connect('key-press-event',self.secret_escape_press)
-        self.text.add_events(Gdk.EventMask.POINTER_MOTION_MASK|Gdk.EventMask.ENTER_NOTIFY_MASK|Gdk.EventMask.LEAVE_NOTIFY_MASK)
-        self.text.connect('motion-notify-event',self.link_motion)
-        self.text.connect('enter-notify-event',self.link_motion)
-        self.text.connect('leave-notify-event',lambda *_:self.clear_link_hover())
+        if not self.code_mode:
+            self.text.add_events(Gdk.EventMask.POINTER_MOTION_MASK|Gdk.EventMask.ENTER_NOTIFY_MASK|Gdk.EventMask.LEAVE_NOTIFY_MASK)
+            self.text.connect('motion-notify-event',self.link_motion)
+            self.text.connect('enter-notify-event',self.link_motion)
+            self.text.connect('leave-notify-event',lambda *_:self.clear_link_hover())
         self.connect('key-release-event',self.link_key_release)
         self.options_menu=Gtk.Menu()
         self.add_options(self.options_menu)
@@ -305,10 +392,270 @@ class Card(Gtk.ApplicationWindow):
         self.move(note['x'],note['y'])
         for widget in [outer,self.move_handle,header_area,heading_row,header,self.menu_button,title_field,self.title_entry,self.title_placeholder,self.close_button,self.text,scroll,self.scrollbar,self.status,grip,*grip.get_children()]:
             widget.get_style_context().add_provider(self.css,Gtk.STYLE_PROVIDER_PRIORITY_USER)
+        if self.code_mode:self.update_code_status()
+
+    def configure_code_buffer(self):
+        self.buffer.set_highlight_syntax(True)
+        self.buffer.set_highlight_matching_brackets(True)
+        self.code_language_manager=GtkSource.LanguageManager.get_default()
+        language_id=None if self.code_language=='plain' else CODE_SOURCE_IDS.get(self.code_language,self.code_language)
+        language=self.code_language_manager.get_language(language_id) if language_id else None
+        self.buffer.set_language(language)
+
+    def update_code_window_title(self):
+        if not self.code_mode:return
+        title=ui.msg('sticky.sticky_code') if self.secret_locked else (self.title_entry.get_text().strip() or ui.msg('sticky.sticky_code'))
+        ui.set(self,'title',ui.msg('sticky.code_window_title',title=title))
+
+    def build_code_toolbar(self):
+        toolbar=Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL,spacing=8)
+        toolbar.get_style_context().add_class('sticky-code-toolbar')
+        language_label=ui.widget(Gtk.Label,label=ui.msg('sticky.code_language'),xalign=0)
+        self.code_language_combo=Gtk.ComboBoxText()
+        ui.call(self.code_language_combo.get_accessible(),'set_name',ui.msg('sticky.code_language'))
+        language_label.set_mnemonic_widget(self.code_language_combo)
+        for identity,label in CODE_LANGUAGES:self.code_language_combo.append(identity,label)
+        if self.code_language not in dict(CODE_LANGUAGES):self.code_language='python'
+        self.code_language_combo.set_active_id(self.code_language)
+        self.code_language_combo.connect('changed',self.code_language_changed)
+        copy=ui.widget(Gtk.Button,label=ui.msg('sticky.copy_code'))
+        copy.connect('clicked',self.copy_code)
+        toolbar.pack_start(language_label,False,False,0)
+        toolbar.pack_start(self.code_language_combo,False,False,0)
+        toolbar.pack_end(copy,False,False,0)
+        self.code_status=ui.widget(Gtk.Label,xalign=1)
+        self.code_status.set_hexpand(True)
+        toolbar.pack_start(self.code_status,True,True,8)
+        self.buffer.connect('mark-set',lambda *_:self.update_code_status())
+        return toolbar
+
+    def code_language_changed(self,combo):
+        if not self.code_mode or self.secret_locked:return
+        language=combo.get_active_id()
+        if not language or language==self.code_language:return
+        if not self.authorize_secret_edit():return
+        try:
+            self.revision=self.app.store.set_code_language(self.note['id'],language,self.revision)
+        except Exception as error:
+            self.error(error);return
+        self.code_language=language;self.note['code_language']=language
+        if GtkSource and isinstance(self.text,GtkSource.View):
+            language_id=None if language=='plain' else CODE_SOURCE_IDS.get(language,language)
+            source_language=self.code_language_manager.get_language(language_id) if language_id else None
+            self.buffer.set_language(source_language)
+        self.update_code_status()
+
+    def update_code_status(self):
+        if not self.code_mode or not self.code_status:return
+        cursor=self.buffer.get_iter_at_mark(self.buffer.get_insert())
+        label=dict(CODE_LANGUAGES).get(self.code_language,'Python')
+        ui.call(self.code_status,'set_text',ui.msg('sticky.code_position',language=label,line=cursor.get_line()+1,column=cursor.get_line_offset()+1))
+
+    def copy_code(self,*_):
+        if self.secret_locked:return
+        Gtk.Clipboard.get(Gdk.SELECTION_CLIPBOARD).set_text(self.value(),-1)
+        ui.call(self.code_status,'set_text',ui.msg('sticky.code_copied'))
+        GLib.timeout_add_seconds(2,lambda:self.update_code_status() or False)
+
+    def reconcile_latest_note(self):
+        """Refresh harmless external changes before switching editor mode."""
+        latest=self.app.store.get(self.note['id'])
+        if (bool(latest.get('code_mode'))!=self.code_mode
+                or bool(latest.get('secret'))!=bool(self.note.get('secret'))):
+            return False,latest
+        if self.dirty and latest['text']!=self.saved:return False,latest
+        if self.title_dirty and (latest.get('title') or '')!=self.saved_title:return False,latest
+        if not self.dirty and latest['text']!=self.saved:
+            self.loading=True
+            try:
+                if self.code_mode:self.buffer.set_text(decode_document(latest['text'])[0])
+                else:self.restore_document(latest['text'])
+            finally:self.loading=False
+            self.saved=latest['text'];self.saved_plain=self.value();self.dirty=False
+            self.history=[self.document_value()];self.index=0
+        if not self.title_dirty and (latest.get('title') or '')!=self.saved_title:
+            self.saved_title=latest.get('title') or ''
+            self.title_entry.set_text(self.saved_title);self.title_dirty=False
+            sync_title_placeholder(self.title_entry,self.title_placeholder)
+        self.revision=latest['revision'];self.note=latest
+        if latest.get('code_language')!=self.code_language:
+            self.code_language=latest.get('code_language') or 'python'
+            if self.code_language_combo:self.code_language_combo.set_active_id(self.code_language)
+            if self.code_mode and GtkSource and isinstance(self.text,GtkSource.View):
+                language_id=None if self.code_language=='plain' else CODE_SOURCE_IDS.get(self.code_language,self.code_language)
+                self.buffer.set_language(self.code_language_manager.get_language(language_id) if language_id else None)
+        self.update_code_window_title()
+        return True,latest
+
+    def code_conflict_choice(self,latest):
+        dialog=ui.widget(Gtk.MessageDialog,transient_for=self,modal=True,
+            message_type=Gtk.MessageType.WARNING,buttons=Gtk.ButtonsType.NONE,
+            text=ui.msg('sticky.code_conflict_title'))
+        ui.call(dialog,'format_secondary_text',ui.msg('sticky.code_conflict_body'))
+        ui.button(dialog,ui.msg('sticky.cancel'),Gtk.ResponseType.CANCEL)
+        ui.button(dialog,ui.msg('sticky.code_use_saved'),Gtk.ResponseType.NO)
+        ui.button(dialog,ui.msg('sticky.code_keep_mine'),Gtk.ResponseType.YES)
+        dialog.set_default_response(Gtk.ResponseType.CANCEL)
+        response=dialog.run();dialog.destroy()
+        if response==Gtk.ResponseType.NO:return latest['text'],latest.get('title') or ''
+        if response==Gtk.ResponseType.YES:return self.value(),self.title_entry.get_text().strip()
+        return None
+
+    def discard_duplicate_windows(self,identity):
+        for window in list(self.app.get_windows()):
+            note=getattr(window,'note',None)
+            if window is not self and isinstance(note,dict) and note.get('id')==identity:
+                window.destroy()
+
+    def resolve_close_conflict(self):
+        """Resolve a stale edit before a close/hide/quit can proceed."""
+        try:
+            latest=self.app.store.get(self.note['id'])
+            if latest['revision']==self.revision:return False
+            rebased,latest=self.reconcile_latest_note()
+            if rebased and self.flush():return True
+            latest=self.app.store.get(self.note['id'])
+            can_keep=(not self.secret_locked and bool(latest.get('code_mode'))==self.code_mode
+                and bool(latest.get('secret'))==bool(self.note.get('secret')))
+            dialog=ui.widget(Gtk.MessageDialog,transient_for=self,modal=True,
+                message_type=Gtk.MessageType.WARNING,buttons=Gtk.ButtonsType.NONE,
+                text=ui.msg('sticky.close_conflict_title'))
+            ui.call(dialog,'format_secondary_text',ui.msg('sticky.close_conflict_body'))
+            ui.button(dialog,ui.msg('sticky.cancel'),Gtk.ResponseType.CANCEL)
+            ui.button(dialog,ui.msg('sticky.close_use_saved'),Gtk.ResponseType.NO)
+            if can_keep:ui.button(dialog,ui.msg('sticky.close_keep_mine'),Gtk.ResponseType.YES)
+            dialog.set_default_response(Gtk.ResponseType.CANCEL)
+            response=dialog.run();dialog.destroy()
+            if response==Gtk.ResponseType.CANCEL:return False
+            if response==Gtk.ResponseType.YES and can_keep:
+                value=self.document_value();title=self.title_entry.get_text().strip()
+                self.revision=self.app.store.resolve_note_conflict(self.note['id'],latest['revision'],
+                    value,title,code_mode=self.code_mode,secret=bool(latest.get('secret')))
+                self.note.update(text=value,title=title,revision=self.revision)
+                self.saved=value;self.saved_plain=self.value();self.saved_title=title
+                self.dirty=False;self.title_dirty=False;self.status.hide()
+                return True
+            if response!=Gtk.ResponseType.NO:return False
+            replace=(bool(latest.get('code_mode'))!=self.code_mode
+                or bool(latest.get('secret'))!=bool(self.note.get('secret'))
+                or latest.get('code_language')!=self.code_language)
+            if replace:
+                replacement=Card(self.app,latest)
+                self.app.fit_monitor(replacement,saved=True)
+                replacement.hide()
+                self.destroy()
+                return True
+            self.loading=True
+            try:
+                if self.code_mode:self.buffer.set_text(decode_document(latest['text'])[0])
+                else:self.restore_document(latest['text'])
+                self.saved=latest['text'];self.saved_plain=self.value()
+                self.saved_title=latest.get('title') or '';self.title_entry.set_text(self.saved_title)
+            finally:self.loading=False
+            self.revision=latest['revision'];self.note=latest
+            self.dirty=False;self.title_dirty=False
+            sync_title_placeholder(self.title_entry,self.title_placeholder)
+            self.update_code_window_title();self.apply_color()
+            if latest.get('secret'):self.lock_secret()
+            return True
+        except Exception as error:
+            self.error(error)
+            return False
+
+    def toggle_code_mode(self,widget):
+        if getattr(self,'code_syncing',False):return
+        selected=bool(widget.get_active())
+        if selected==self.code_mode:return
+        if not self.authorize_secret_edit():
+            self.code_syncing=True;widget.set_active(self.code_mode);self.code_syncing=False
+            return
+        identity=self.note['id'];old_mode=self.code_mode
+        if not self.dirty and not self.title_dirty:
+            try:
+                rebased,latest=self.reconcile_latest_note()
+                if not rebased:
+                    ui.call(self.status,'set_text',ui.msg('sticky.code_mode_conflict_state'));self.status.show()
+                    self.code_syncing=True;widget.set_active(old_mode);self.code_syncing=False
+                    return
+            except Exception as error:
+                self.error(error)
+                self.code_syncing=True;widget.set_active(old_mode);self.code_syncing=False
+                return
+        if not self.flush():
+            try:
+                latest=self.app.store.get(identity)
+                if latest['revision']==self.revision:
+                    self.code_syncing=True;widget.set_active(old_mode);self.code_syncing=False
+                    return
+                rebased,latest=self.reconcile_latest_note()
+                if rebased and self.flush():
+                    pass
+                else:
+                    # If both processes edited the contents, make the choice
+                    # explicit instead of silently dropping either version.
+                    latest=self.app.store.get(identity)
+                    if (bool(latest.get('secret'))!=bool(self.note.get('secret'))
+                            or bool(latest.get('code_mode'))!=old_mode):
+                        ui.call(self.status,'set_text',ui.msg('sticky.code_mode_conflict_state'));self.status.show()
+                        self.code_syncing=True;widget.set_active(old_mode);self.code_syncing=False
+                        return
+                    choice=self.code_conflict_choice(latest)
+                    if choice is None:
+                        self.code_syncing=True;widget.set_active(old_mode);self.code_syncing=False
+                        return
+                    next_text,next_title=choice
+                    self.save_geometry()
+                    width,height=(900,620) if selected else (310,300)
+                    self.revision=self.app.store.transition_code_mode(identity,selected,latest['revision'],
+                        text=next_text,title=next_title,width=width,height=height)
+                    self.hide()
+                    try:
+                        replacement=Card(self.app,self.app.store.get(identity))
+                        self.app.fit_monitor(replacement,saved=True)
+                    except Exception:
+                        self.discard_duplicate_windows(identity)
+                        current=self.app.store.get(identity)
+                        self.revision=self.app.store.set_code_mode(identity,old_mode,current['revision'])
+                        self.show();self.present()
+                        raise
+                    self.destroy();replacement.present();return
+            except Exception as error:
+                self.error(error)
+                self.code_syncing=True;widget.set_active(old_mode);self.code_syncing=False
+                return
+        try:
+            if selected and self.document_value()!=self.value():
+                self.revision=self.app.store.text(identity,self.value(),self.revision)
+                self.saved=self.value();self.saved_plain=self.saved;self.dirty=False
+            self.save_geometry()
+            width,height=(900,620) if selected else (310,300)
+            next_text=self.value() if selected else self.saved
+            next_title=self.title_entry.get_text().strip()
+            self.revision=self.app.store.transition_code_mode(identity,selected,self.revision,
+                text=next_text,title=next_title,width=width,height=height)
+            self.hide()
+            replacement=Card(self.app,self.app.store.get(identity))
+            self.app.fit_monitor(replacement,saved=True)
+        except Exception as error:
+            self.discard_duplicate_windows(identity)
+            try:
+                current=self.app.store.get(identity)
+                if bool(current.get('code_mode'))!=old_mode:
+                    revision=self.app.store.set_code_mode(identity,old_mode,current['revision'])
+                    self.app.store.properties(identity,width=self.note['width'],height=self.note['height'])
+                    self.revision=revision
+            except Exception:pass
+            if self.alive and not self.get_visible():self.show();self.present()
+            self.error(error)
+            self.code_syncing=True;widget.set_active(old_mode);self.code_syncing=False
+            return
+        self.destroy()
+        replacement.present()
 
     def value(self):return self.buffer.get_text(self.buffer.get_start_iter(),self.buffer.get_end_iter(),True)
 
     def document_value(self):
+        if self.code_mode:return self.value()
         text=self.value();spans=[]
         for style,tag in self.style_tags.items():
             cursor=self.buffer.get_start_iter()
@@ -329,7 +676,7 @@ class Card(Gtk.ApplicationWindow):
             self.buffer.apply_tag(self.style_tags[style],self.buffer.get_iter_at_offset(start),self.buffer.get_iter_at_offset(end))
 
     def apply_typing_styles(self,_buffer,end_iter,_text,length):
-        if self.loading or self.secret_locked or not self.typing_styles:return
+        if self.code_mode or self.loading or self.secret_locked or not self.typing_styles:return
         end=end_iter.copy();start=end.copy()
         if not start.backward_chars(len(_text)):start=self.buffer.get_start_iter()
         for style in self.typing_styles:self.buffer.apply_tag(self.style_tags[style],start,end)
@@ -357,9 +704,10 @@ class Card(Gtk.ApplicationWindow):
     def text_format_key_press(self,_widget,event):
         if self.secret_locked or not event.state&Gdk.ModifierType.CONTROL_MASK:return False
         key=(Gdk.keyval_name(event.keyval) or '').lower()
+        if key=='e':self.text.emit('insert-emoji');return True
+        if self.code_mode:return False
         style={'b':'bold','i':'italic','u':'underline'}.get(key)
         if style:return self.toggle_format(style)
-        if key=='e':self.text.emit('insert-emoji');return True
         return False
 
     def secret_escape_press(self,_widget,event):
@@ -382,6 +730,36 @@ class Card(Gtk.ApplicationWindow):
         self.history_timer=GLib.timeout_add(300,self.record)
 
     def apply_color(self):
+        self.set_opacity(0.85 if self.note.get('reduced_opacity') else 1.0)
+        if self.code_mode:
+            self.get_style_context().add_class('sticky-code-window')
+            self.css.load_from_data(b'''
+            window.sticky-code-window {background-color:#101113;color:#e4e7ef;}
+            box#sticky-code-frame {background-color:#101113;color:#e4e7ef;border:0;border-radius:0;padding:0;}
+            box#sticky-code-header {background-color:#191a1d;border:0;padding:8px 12px;}
+            eventbox#sticky-note-move-handle {background-color:#191a1d;border:0;}
+            textview, textview text, label, eventbox, scrolledwindow, viewport {background-color:#101113;color:#e4e7ef;}
+            scrolledwindow#sticky-note-scroll, scrolledwindow#sticky-note-scroll viewport, scrolledwindow#sticky-note-scroll undershoot, scrolledwindow#sticky-note-scroll overshoot, scrolledwindow#sticky-note-scroll junction {border:0;background-color:#101113;background-image:none;box-shadow:none;}
+            textview#sticky-note-text, textview#sticky-note-text.view, textview#sticky-note-text:focus, textview#sticky-note-text.view:focus, textview#sticky-note-text text {border:none;background-color:#101113;background-image:none;box-shadow:none;outline:none;padding:0;}
+            textview#sticky-note-text {font:12px Monospace;caret-color:#f8f8f2;}
+            entry#sticky-note-title {font:bold 14px Sans;color:#f8f8f2;background:transparent;border:0;box-shadow:none;padding:0;}
+            button {background:#25272b;border:0;border-radius:4px;color:#e4e7ef;padding:6px 12px;}
+            button:hover {background:#303237;}
+            button#sticky-code-close, button.sticky-code-menu {background:transparent;border:0;box-shadow:none;color:#c7c9cc;padding:0;min-width:28px;min-height:28px;}
+            button#sticky-code-close:hover {background:#c42b1c;color:#ffffff;}
+            button.sticky-code-menu:hover {background:#292b2f;color:#ffffff;}
+            button#sticky-note-move-handle, button#sticky-note-resize-grip, button#sticky-secret-unlock-control {background:transparent;background-image:none;border:0;box-shadow:none;padding:0;}
+            button#sticky-note-move-handle:hover, button#sticky-note-resize-grip:hover, button#sticky-secret-unlock-control:hover, button#sticky-secret-unlock-control:active {background:transparent;background-image:none;border:0;box-shadow:none;}
+            button#sticky-note-move-handle:focus, button#sticky-note-resize-grip:focus, button#sticky-secret-unlock-control:focus {background:transparent;background-image:none;border:2px solid #586b78;box-shadow:none;outline:none;border-radius:3px;}
+            combobox, combobox button {color:#e4e7ef;}
+            label {font:11px Sans;color:#aab0bf;}
+            box.sticky-code-toolbar {background-color:#151619;border:0;padding:8px 12px;}
+            ''' )
+            if GtkSource and isinstance(self.text,GtkSource.View):
+                manager=GtkSource.StyleSchemeManager.get_default()
+                scheme=manager.get_scheme('oblivion') or manager.get_scheme('classic')
+                if scheme:self.buffer.set_style_scheme(scheme)
+            return
         color=self.note['color']
         self.css.load_from_data(f'''
         window.postit {{background-color:{color};border-radius:{NOTE_CORNER_RADIUS}px;}}
@@ -401,11 +779,15 @@ class Card(Gtk.ApplicationWindow):
         eventbox#sticky-note-move-handle {{background-color:transparent;border:none;}}
         button {{background:transparent;border:0;box-shadow:none;color:#161616;padding:0;min-width:18px;min-height:18px;}}
         button:hover {{background-color:rgba(0,0,0,0.08);border-radius:4px;}}
+        button#sticky-note-move-handle, button#sticky-note-resize-grip, button#sticky-secret-unlock-control {{background:transparent;background-image:none;border:0;box-shadow:none;padding:0;}}
+        button#sticky-note-move-handle:hover, button#sticky-note-resize-grip:hover, button#sticky-secret-unlock-control:hover, button#sticky-secret-unlock-control:active {{background:transparent;background-image:none;border:0;box-shadow:none;}}
+        button#sticky-note-move-handle:focus, button#sticky-note-resize-grip:focus, button#sticky-secret-unlock-control:focus {{background:transparent;background-image:none;border:2px solid #46545e;box-shadow:none;outline:none;border-radius:3px;}}
         label {{font:11px Sans;}}
         '''.encode())
 
     def update_rounded_shape(self,*_):
         """Keep the X11 window mask synchronized with every note resize."""
+        if self.code_mode:return
         if not self.get_realized():return
         window=self.get_window()
         if window is None:return
@@ -451,6 +833,7 @@ class Card(Gtk.ApplicationWindow):
             return
         sync_title_placeholder(self.title_entry,self.title_placeholder)
         self.title_dirty=self.title_entry.get_text().strip()!=self.saved_title
+        if self.code_mode:self.update_code_window_title()
 
     def record(self):
         if self.history_timer:GLib.source_remove(self.history_timer);self.history_timer=0
@@ -475,7 +858,13 @@ class Card(Gtk.ApplicationWindow):
             return True
         if getattr(self,'secret_locked',False):return False
         if key_name=='Escape' and self.note.get('secret'):
+            geometry_mode=getattr(self,'keyboard_geometry_mode',None)
+            if geometry_mode:
+                return self.keyboard_geometry_key_press(_widget,event,geometry_mode)
             self.lock_secret();return True
+        geometry_mode=getattr(self,'keyboard_geometry_mode',None)
+        if geometry_mode:
+            return self.keyboard_geometry_key_press(_widget,event,geometry_mode)
         if key_name in ('Control_L','Control_R'):self.refresh_link_hover()
         if event.state&Gdk.ModifierType.CONTROL_MASK:
             key=(Gdk.keyval_name(event.keyval) or '').lower()
@@ -484,6 +873,42 @@ class Card(Gtk.ApplicationWindow):
             if key=='0':self.restore_size();return True
             if key=='n':self.app.new_card(self);return True
         return False
+
+    def keyboard_geometry_key_press(self,_widget,event,mode):
+        """Expose move and resize through focused keyboard-operable controls."""
+        key=Gdk.keyval_name(event.keyval)
+        if self.keyboard_geometry_mode is None:
+            if key not in ('Return','KP_Enter','space'):return False
+            if not self.authorize_secret_edit():return True
+            self.keyboard_geometry_mode=mode
+            self.keyboard_geometry_previous_status=(self.status.get_text(),self.status.get_visible())
+            message='sticky.keyboard_move_mode' if mode=='move' else 'sticky.keyboard_resize_mode'
+            ui.call(self.status,'set_text',ui.msg(message));self.status.show()
+            return True
+        if self.keyboard_geometry_mode!=mode:return False
+        if key in ('Escape','Return','KP_Enter'):
+            self.keyboard_geometry_mode=None
+            self.save_geometry()
+            previous=self.keyboard_geometry_previous_status or ('',False)
+            self.keyboard_geometry_previous_status=None
+            self.status.set_text(previous[0])
+            if previous[1]:self.status.show()
+            else:self.status.hide()
+            if key=='Escape' and self.note.get('secret') and not self.secret_locked:self.lock_secret()
+            return True
+        delta=10 if event.state&Gdk.ModifierType.SHIFT_MASK else 1
+        directions={'Left':(-1,0),'Right':(1,0),'Up':(0,-1),'Down':(0,1)}
+        if key not in directions:return False
+        dx,dy=directions[key]
+        if mode=='move':
+            x,y=self.get_position();self.move(x+dx*delta,y+dy*delta)
+        else:
+            width,height=self.get_size()
+            minimum_width,minimum_height=(320,220) if self.code_mode else (180,120)
+            width=max(minimum_width,min(10000,width+dx*delta))
+            height=max(minimum_height,min(10000,height+dy*delta))
+            self.resize(width,height)
+        return True
 
     def clear_link_hover(self):
         self.buffer.remove_tag(self.link_tag,self.buffer.get_start_iter(),self.buffer.get_end_iter())
@@ -669,11 +1094,39 @@ class Card(Gtk.ApplicationWindow):
         self.begin_move_drag(1,int(event.x_root),int(event.y_root),event.time)
         return True
 
+    def code_drag_region_press(self,region,event):
+        """Move the code window from non-interactive header/toolbar space."""
+        if not self.code_mode or event.button!=1:return False
+        target=Gtk.get_event_widget(event)
+        if target is None:return False
+        interactive=(Gtk.Button,Gtk.Entry,Gtk.ComboBox,Gtk.TextView)
+        current=target
+        while current is not None and current is not region:
+            if isinstance(current,interactive):return False
+            current=current.get_parent()
+        if current is not region:return False
+        if not self.authorize_secret_edit():return True
+        self.begin_move_drag(1,int(event.x_root),int(event.y_root),event.time)
+        return True
+
+    def wrap_code_drag_region(self,child):
+        region=Gtk.EventBox();region.set_visible_window(False)
+        region.add_events(Gdk.EventMask.BUTTON_PRESS_MASK)
+        region.add(child)
+        region.connect('button-press-event',self.code_drag_region_press)
+        return region
+
     def resize_press(self,_widget,event):
         if event.button==1:
             if not self.authorize_secret_edit():return True
             self.begin_resize_drag(Gdk.WindowEdge.SOUTH_EAST,1,int(event.x_root),int(event.y_root),event.time);return True
         return False
+
+    def resize_edge_press(self,_widget,event,edge):
+        if event.button!=1:return False
+        if not self.authorize_secret_edit():return True
+        self.begin_resize_drag(edge,1,int(event.x_root),int(event.y_root),event.time)
+        return True
 
     def authorize_secret_edit(self):
         if not self.note.get('secret') or not self.secret_locked:return True
@@ -973,6 +1426,11 @@ class Card(Gtk.ApplicationWindow):
         secret.set_active(bool(self.note.get('secret')))
         secret.connect('toggled',self.toggle_secret)
         self.secret_items.append(secret);menu.append(secret)
+        code_mode=ui.widget(Gtk.CheckMenuItem,label=ui.msg('sticky.sticky_code'))
+        self.code_syncing=True;code_mode.set_active(self.code_mode);self.code_syncing=False
+        code_mode.connect('toggled',self.toggle_code_mode);menu.append(code_mode)
+        if menu is getattr(self,'options_menu',None):self.code_mode_item=code_mode
+        if self.note.get('secret') and self.secret_locked:code_mode.set_sensitive(False)
         menu.append(Gtk.SeparatorMenuItem())
         item(ui.msg('sticky.new_note'),lambda:self.app.new_card(self))
         restore=item(ui.msg('sticky.restore_size'),self.restore_size)
@@ -984,6 +1442,11 @@ class Card(Gtk.ApplicationWindow):
         above=ui.widget(Gtk.CheckMenuItem,label=ui.msg('sticky.above'));above.set_active(bool(self.note['above']))
         above.set_sensitive(not self.secret_locked)
         above.connect('toggled',lambda widget:self.set_property_value(above=int(widget.get_active())));menu.append(above)
+        opacity=ui.widget(Gtk.CheckMenuItem,label=ui.msg('sticky.reduce_opacity'))
+        opacity.set_active(bool(self.note.get('reduced_opacity',0)))
+        opacity.set_sensitive(not self.secret_locked)
+        opacity.connect('toggled',lambda widget:self.set_property_value(reduced_opacity=int(widget.get_active())))
+        menu.append(opacity)
         item(ui.msg('sticky.hide'),self.hide_note)
         archive=item(ui.msg('sticky.archive'),self.archive_note)
         archive.set_sensitive(not self.secret_locked)
@@ -1000,7 +1463,7 @@ class Card(Gtk.ApplicationWindow):
             self.archived_notes_menu=archived_menu;self.archived_notes_item=archived_item
         item(ui.msg('sticky.quit'),self.app.safe_quit)
         if menu is getattr(self,'options_menu',None):
-            self.secret_edit_menu_items=[attach_item,email_item,restore,parent,above,archive]
+            self.secret_edit_menu_items=[attach_item,email_item,restore,parent,above,opacity,archive,code_mode]
             self.sync_secret_menu_actions()
 
     def show_shortcuts(self):
@@ -1047,15 +1510,18 @@ class Card(Gtk.ApplicationWindow):
         if not self.alive:return False
         if self.note.get('secret') and not self.authenticate_secret():return False
         if not self.alive or not self.flush():return False
-        try:self.app.store.delete(self.note['id'],self.revision)
-        except Exception as error:
-            self.error(error);self.text.grab_focus();return False
-        if hasattr(self,'attachment_preview_cache'):self.attachment_preview_cache.clear()
+        # Remove private email drafts before committing deletion. If cleanup
+        # fails, keep the note and its window so the user can resolve the
+        # cleanup problem instead of leaving a sensitive draft behind.
         try:purge_note_email_drafts([self.note['id']])
         except Exception as error:
-            dialog=ui.widget(Gtk.MessageDialog,transient_for=self,modal=True,message_type=Gtk.MessageType.WARNING,
-                buttons=Gtk.ButtonsType.CLOSE,text=ui.msg('sticky.email_cache_cleanup_failed',error=ui.error_message(error)))
-            dialog.run();dialog.destroy()
+            self.error(error);self.text.grab_focus();return False
+        try:self.app.store.delete(self.note['id'],self.revision)
+        except Exception as error:
+            # The draft may already be gone, but the note remains authoritative
+            # and visible if SQLite rejects deletion or detects a revision race.
+            self.error(error);self.text.grab_focus();return False
+        if hasattr(self,'attachment_preview_cache'):self.attachment_preview_cache.clear()
         self.destroy();return True
 
     def insert_emoji(self,editor):
@@ -1064,37 +1530,90 @@ class Card(Gtk.ApplicationWindow):
         if self.emoji_dialog:
             self.emoji_dialog.present();return
         mark=self.buffer.create_mark(None,self.buffer.get_iter_at_mark(self.buffer.get_insert()),False)
-        # Gtk3's chooser is private. Invoke its public TextView action in a roomy
-        # transient root rather than letting the tiny sticky window clip the popup.
-        dialog=ui.widget(Gtk.Dialog,transient_for=self,modal=True,title=ui.msg('sticky.insert_emoji'))
-        dialog.set_default_size(480,440);dialog.set_resizable(False)
-        self.emoji_dialog=dialog
-        anchor=Gtk.TextView()
-        anchor.set_halign(Gtk.Align.CENTER);anchor.set_valign(Gtk.Align.CENTER)
-        anchor.set_size_request(1,1)
-        dialog.get_content_area().pack_start(anchor,True,True,0)
-        dialog.add_button(ui.tr('sticky.cancel'),Gtk.ResponseType.CANCEL)
+        # Use its own undecorated toplevel instead of Gtk.Popover: native
+        # popovers stay in the note's stacking/geometry context and can be cut
+        # off by a small note or by an overlapping Sticky Code window.
+        popup=Gtk.Window.new(Gtk.WindowType.TOPLEVEL)
+        popup.set_title('');popup.set_decorated(False);popup.set_resizable(False)
+        popup.set_skip_taskbar_hint(True);popup.set_keep_above(True);popup.set_accept_focus(True)
+        popup.set_transient_for(self);popup.set_type_hint(Gdk.WindowTypeHint.POPUP_MENU)
+        popup.set_opacity(1.0);popup.set_position(Gtk.WindowPosition.NONE)
+        popup.set_border_width(6);popup.set_name('sticky-emoji-popup')
+        popup.get_style_context().add_class('sticky-emoji-popup')
+        self.emoji_dialog=popup
+        provider=Gtk.CssProvider()
+        provider.load_from_data(b'''
+        window.sticky-emoji-popup {background-color:#292a2d;color:#f3f4f6;border:1px solid rgba(255,255,255,0.16);border-radius:8px;}
+        button.sticky-emoji-choice {background:transparent;background-image:none;border:0;box-shadow:none;border-radius:5px;padding:0;min-width:34px;min-height:34px;font:20px Sans;}
+        button.sticky-emoji-choice:hover {background-color:rgba(255,255,255,0.13);}
+        ''' )
+        popup.get_style_context().add_provider(provider,Gtk.STYLE_PROVIDER_PRIORITY_USER)
+        self.emoji_css=provider
+        grid=Gtk.Grid(column_spacing=2,row_spacing=2)
+        grid.set_border_width(1)
+        emojis=(
+            '😀','😃','😄','😁','😆','😅','😂','🤣',
+            '🙂','🙃','😉','😊','😇','😍','🥰','😘',
+            '😗','😙','😚','😋','😛','😜','🤪','😝',
+            '🤗','🤔','😴','😎','🥳','😭','😤','😡',
+            '👍','👎','👏','🙏','🤝','💪','🙌','🤷',
+            '❤️','💔','💖','🔥','🎉','✨','🌟','💯',
+        )
+        columns=8
+        for index,value in enumerate(emojis):
+            button=Gtk.Button();button.set_relief(Gtk.ReliefStyle.NONE)
+            button.get_style_context().add_class('sticky-emoji-choice')
+            button.add(Gtk.Label(label=value))
+            button.connect('clicked',lambda _button,emoji=value:choose(emoji))
+            grid.attach(button,index%columns,index//columns,1,1)
+        popup.add(grid);grid.show_all()
+        point=Gdk.Rectangle();cursor=self.buffer.get_iter_at_mark(self.buffer.get_insert())
+        rect=self.text.get_iter_location(cursor)
+        point.x,point.y=self.text.buffer_to_window_coords(Gtk.TextWindowType.WIDGET,rect.x,rect.y)
+        point.width=max(1,rect.width);point.height=max(1,rect.height)
+        text_window=self.text.get_window(Gtk.TextWindowType.WIDGET)
+        origin=text_window.get_origin() if text_window else (False,0,0)
+        anchor_x=origin[-2]+point.x;anchor_y=origin[-1]+point.y+max(point.height,18)
+        min_width,natural_width=popup.get_preferred_width()
+        min_height,natural_height=popup.get_preferred_height()
+        # GTK 3 themes can allocate the last grid column a few pixels past the
+        # popup's preferred outer width. Keep a small content safety margin so
+        # the final emoji column stays inside the window on real displays.
+        width=max(min_width,natural_width)+8;height=max(min_height,natural_height)+8
+        display=Gdk.Display.get_default()
+        monitor=display.get_monitor_at_point(anchor_x,anchor_y) if display else None
+        if monitor is None and display:monitor=display.get_primary_monitor()
+        workarea=monitor.get_workarea() if monitor else Gdk.Rectangle()
+        if monitor is None:workarea.x=0;workarea.y=0;workarea.width=width;workarea.height=height
+        left=workarea.x+8;top=workarea.y+8
+        right=workarea.x+workarea.width-8;bottom=workarea.y+workarea.height-8
+        x=min(max(anchor_x,left),max(left,right-width))
+        y=anchor_y
+        if y+height>bottom:y=point.y+origin[-1]-height-6
+        y=min(max(y,top),max(top,bottom-height))
+        popup.set_default_size(width,height);popup.move(x,y)
         def finish(*_):
-            if self.emoji_dialog is not dialog:return
+            if self.emoji_dialog is not popup:return
             self.emoji_dialog=None
             if self.alive and not getattr(self,'secret_locked',False):
                 self.buffer.place_cursor(self.buffer.get_iter_at_mark(mark))
-                self.present();self.text.grab_focus()
+                self.text.grab_focus()
             self.buffer.delete_mark(mark)
-        dialog.connect('destroy',finish)
-        dialog.connect('response',lambda *_:dialog.destroy())
-        dialog.connect('key-press-event',lambda _w,event: (dialog.destroy() or True) if Gdk.keyval_name(event.keyval)=='Escape' else False)
-        def chosen(buffer):
-            value=buffer.get_text(buffer.get_start_iter(),buffer.get_end_iter(),True)
-            if value and self.alive and not getattr(self,'secret_locked',False):
-                self.buffer.insert(self.buffer.get_iter_at_mark(mark),value)
-                GLib.idle_add(lambda:dialog.destroy() or False)
-        anchor.get_buffer().connect('changed',chosen)
-        def open_picker():
-            if self.alive and self.emoji_dialog is dialog:
-                anchor.grab_focus();anchor.emit('insert-emoji')
+        def choose(value):
+            if not self.alive or getattr(self,'secret_locked',False):return
+            self.buffer.insert(self.buffer.get_iter_at_mark(mark),value)
+            popup.destroy()
+        def key_press(_widget,event):
+            if Gdk.keyval_name(event.keyval)=='Escape':
+                popup.destroy();return True
             return False
-        dialog.show_all();dialog.present();GLib.idle_add(open_picker)
+        def focus_out(*_):
+            if self.emoji_dialog is popup:GLib.idle_add(lambda:popup.destroy() if self.emoji_dialog is popup else False)
+            return False
+        popup.connect('destroy',finish)
+        popup.connect('key-press-event',key_press)
+        popup.connect('focus-out-event',focus_out)
+        popup.show_all();popup.present();popup.set_focus(grid.get_child_at(0,0))
 
     def cancel_secret_timer(self):
         if self.secret_timer:GLib.source_remove(self.secret_timer);self.secret_timer=0
@@ -1115,8 +1634,10 @@ class Card(Gtk.ApplicationWindow):
         if window:window.set_cursor(None)
         return False
 
-    def unlock_pointer_click(self,_widget,event):
-        if event.button==1:self.unlock_secret()
+    def unlock_pointer_click(self,_widget):
+        # GtkButton's clicked signal is emitted for both pointer and keyboard
+        # activation, so no pointer-event argument should be required here.
+        self.unlock_secret()
         return True
 
     def secret_enter(self,_widget,event):
@@ -1149,6 +1670,8 @@ class Card(Gtk.ApplicationWindow):
         if not self.alive or not self.note.get('secret'):return
         saved=self.flush()
         self.secret_locked=True
+        self.keyboard_geometry_mode=None;self.keyboard_geometry_previous_status=None
+        self.update_code_window_title()
         self.sync_secret_badge()
         self.status.set_text('');self.status.hide()
         self.sync_secret_menu_actions()
@@ -1166,7 +1689,7 @@ class Card(Gtk.ApplicationWindow):
     def unlock_secret(self):
         if not self.note.get('secret') or not self.secret_locked:return
         if not self.authenticate_secret() or not self.alive:return
-        self.secret_locked=False;self.secret_activity()
+        self.secret_locked=False;self.update_code_window_title();self.secret_activity()
         self.sync_secret_badge()
         self.sync_secret_menu_actions()
         self.secret_stack.set_visible_child_name('editor')
@@ -1331,7 +1854,7 @@ class Card(Gtk.ApplicationWindow):
             self.note['secret']=int(selected)
             if selected:self.lock_secret()
             else:
-                self.secret_locked=False;self.secret_activity();self.secret_stack.set_visible_child_name('editor')
+                self.secret_locked=False;self.update_code_window_title();self.secret_activity();self.secret_stack.set_visible_child_name('editor')
                 self.scroll.show_all()
                 self.sync_secret_menu_actions()
                 self.title_field.set_no_show_all(False);self.title_field.show_all();sync_title_placeholder(self.title_entry,self.title_placeholder)
@@ -1351,7 +1874,8 @@ class Card(Gtk.ApplicationWindow):
         return True
 
     def hide_note(self):
-        if not self.flush():return False
+        if not self.flush() and not self.resolve_close_conflict():return False
+        if not self.alive:return True
         # A window can be hidden or closed before the debounced configure
         # callback runs. Persist its final native position while it is still
         # visible and before locking a secret note.
@@ -1371,7 +1895,7 @@ class Card(Gtk.ApplicationWindow):
         self.pending_restore=True
         self.unmaximize();self.unfullscreen()
         if not self.expanded():
-            self.pending_restore=False;self.resize(310,300)
+            self.pending_restore=False;self.resize(*( (900,620) if self.code_mode else (310,300) ))
 
     def state_changed(self,_window,event):
         expanded=event.new_window_state&(Gdk.WindowState.MAXIMIZED|Gdk.WindowState.FULLSCREEN)
@@ -1399,8 +1923,9 @@ class Card(Gtk.ApplicationWindow):
         if hasattr(self,'cancel_secret_timer'):self.cancel_secret_timer()
         for dialog in [getattr(self,'auth_dialog',None),getattr(self,'settings_dialog',None)]:
             if dialog:dialog.destroy()
-        if self.emoji_dialog:self.emoji_dialog.destroy()
-        for timer in [self.history_timer,self.geometry_timer,self.menu_pointer_timer]:
+        emoji_dialog=getattr(self,'emoji_dialog',None)
+        if emoji_dialog:emoji_dialog.destroy()
+        for timer in [getattr(self,'history_timer',0),getattr(self,'geometry_timer',0),getattr(self,'menu_pointer_timer',0)]:
             if timer:GLib.source_remove(timer)
         self.history_timer=0;self.geometry_timer=0;self.menu_pointer_timer=0
 

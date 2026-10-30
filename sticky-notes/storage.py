@@ -25,6 +25,7 @@ PIN_ITERATIONS=600000
 PIN_FAILURE_LIMIT=5
 PIN_COOLDOWN_SECONDS=30
 PIN_METADATA_KEY='secret_pin_v1'
+CODE_LANGUAGES={'python','javascript','typescript','json','html','css','c','cpp','rust','go','java','sql','sh','markdown','plain'}
 ATTACHMENT_EXTENSIONS={
     # Images and text documents
     'png','jpg','jpeg','gif','webp','bmp','tif','tiff','svg','heic','avif',
@@ -46,15 +47,58 @@ class PinLockedError(ValueError):
 class BackupPurgeError(OSError):
     """A snapshot could not be safely purged; the active note was retained."""
 
+class InstanceAlreadyRunningError(RuntimeError):
+    """Another process already owns this Sticky Notes data directory."""
+
+class InstanceLock:
+    """Hold one process-wide lock for an application's data directory."""
+    def __init__(self,directory):
+        directory=Path(directory)
+        directory.mkdir(parents=True,exist_ok=True,mode=0o700)
+        self.fd=None
+        path=directory/'.app-instance.lock'
+        flags=os.O_CREAT|os.O_RDWR|os.O_NONBLOCK|getattr(os,'O_NOFOLLOW',0)
+        fd=_open_private_lock(path,flags)
+        try:
+            try:fcntl.flock(fd,fcntl.LOCK_EX|fcntl.LOCK_NB)
+            except BlockingIOError:
+                raise InstanceAlreadyRunningError('Sticky Notes is already running for this data directory.') from None
+            self.fd=fd
+        except BaseException:
+            os.close(fd)
+            raise
+
+    def close(self):
+        if self.fd is None:return
+        fd,self.fd=self.fd,None
+        try:fcntl.flock(fd,fcntl.LOCK_UN)
+        finally:os.close(fd)
+
+def _open_private_lock(path,flags):
+    """Open a lock file without changing permissions on a shared inode."""
+    fd=os.open(path,flags,0o600)
+    try:
+        info=os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode):
+            raise OSError('Sticky lock is not a regular file.')
+        if info.st_uid!=os.geteuid():
+            raise OSError('Sticky lock is not owned by the current user.')
+        if info.st_nlink!=1:
+            raise OSError('Sticky lock has unexpected hard links.')
+        # Only chmod an inode after confirming it is private to this pathname.
+        os.fchmod(fd,0o600)
+        return fd
+    except BaseException:
+        os.close(fd)
+        raise
+
 @contextmanager
 def _startup_lock(directory, timeout=3):
     """Serialize startup before opening SQLite; waiting is bounded, not blocking."""
     deadline=time.monotonic()+timeout
     flags=os.O_CREAT|os.O_RDWR|os.O_NONBLOCK|getattr(os,'O_NOFOLLOW',0)
-    fd=os.open(Path(directory)/'.startup.lock',flags,0o600)
+    fd=_open_private_lock(Path(directory)/'.startup.lock',flags)
     try:
-        if not stat.S_ISREG(os.fstat(fd).st_mode):raise OSError('Sticky startup lock is not a regular file.')
-        os.fchmod(fd,0o600)
         while True:
             try:
                 fcntl.flock(fd,fcntl.LOCK_EX|fcntl.LOCK_NB)
@@ -99,10 +143,8 @@ def _backup_lock(directory):
     directory.mkdir(parents=True,exist_ok=True,mode=0o700)
     lock_path=directory/'.lock'
     flags=os.O_CREAT|os.O_RDWR|getattr(os,'O_NOFOLLOW',0)
-    fd=os.open(lock_path,flags,0o600)
+    fd=_open_private_lock(lock_path,flags)
     try:
-        if not stat.S_ISREG(os.fstat(fd).st_mode):raise OSError('Sticky backup lock is not a regular file.')
-        os.fchmod(fd,0o600)
         fcntl.flock(fd,fcntl.LOCK_EX)
         yield
     finally:
@@ -136,7 +178,10 @@ class Store:
           width INTEGER NOT NULL DEFAULT 310, height INTEGER NOT NULL DEFAULT 300,
           above INTEGER NOT NULL DEFAULT 0, revision INTEGER NOT NULL DEFAULT 0,
           archived INTEGER NOT NULL DEFAULT 0,
-          secret INTEGER NOT NULL DEFAULT 0 CHECK(secret IN (0,1)));
+          secret INTEGER NOT NULL DEFAULT 0 CHECK(secret IN (0,1)),
+          code_mode INTEGER NOT NULL DEFAULT 0 CHECK(code_mode IN (0,1)),
+          reduced_opacity INTEGER NOT NULL DEFAULT 0 CHECK(reduced_opacity IN (0,1)),
+          code_language TEXT NOT NULL DEFAULT 'python');
         CREATE TABLE IF NOT EXISTS metadata(key TEXT PRIMARY KEY, value TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS attachments(
           id TEXT PRIMARY KEY, note_id TEXT NOT NULL REFERENCES notes(id) ON DELETE CASCADE,
@@ -153,6 +198,12 @@ class Store:
                 self.db.execute("ALTER TABLE notes ADD COLUMN title TEXT NOT NULL DEFAULT ''")
             if 'secret' not in columns:
                 self.db.execute('ALTER TABLE notes ADD COLUMN secret INTEGER NOT NULL DEFAULT 0 CHECK(secret IN (0,1))')
+            if 'code_mode' not in columns:
+                self.db.execute('ALTER TABLE notes ADD COLUMN code_mode INTEGER NOT NULL DEFAULT 0 CHECK(code_mode IN (0,1))')
+            if 'reduced_opacity' not in columns:
+                self.db.execute('ALTER TABLE notes ADD COLUMN reduced_opacity INTEGER NOT NULL DEFAULT 0 CHECK(reduced_opacity IN (0,1))')
+            if 'code_language' not in columns:
+                self.db.execute("ALTER TABLE notes ADD COLUMN code_language TEXT NOT NULL DEFAULT 'python'")
             self.db.commit()
         except BaseException:
             if self.db.in_transaction:self.db.rollback()
@@ -564,6 +615,49 @@ class Store:
             if cursor.rowcount!=1:raise _i18n.exception(ValueError,'domain.sticky_storage.concurrent_edit')
         return revision+1
 
+    def set_code_mode(self,identity,value,revision):
+        if type(value) is not bool or type(revision) is not int or revision<0:
+            raise _i18n.exception(ValueError,'domain.sticky_storage.invalid_property')
+        with self.db:
+            cursor=self.db.execute('UPDATE notes SET code_mode=?,revision=revision+1 WHERE id=? AND revision=?',(int(value),identity,revision))
+            if cursor.rowcount!=1:raise _i18n.exception(ValueError,'domain.sticky_storage.concurrent_edit')
+        return revision+1
+
+    def transition_code_mode(self,identity,value,revision,*,text,title,width,height):
+        """Atomically save note contents and switch its editor mode."""
+        if (type(value) is not bool or type(revision) is not int or revision<0
+                or not isinstance(text,str) or len(text)>100000
+                or not isinstance(title,str) or len(title)>200
+                or any(type(number) is not int or not 1<=number<=100000 for number in (width,height))):
+            raise _i18n.exception(ValueError,'domain.sticky_storage.invalid_property')
+        with self.db:
+            cursor=self.db.execute(
+                'UPDATE notes SET text=?,title=?,code_mode=?,width=?,height=?,revision=revision+1 WHERE id=? AND revision=?',
+                (text,title,int(value),width,height,identity,revision))
+            if cursor.rowcount!=1:raise _i18n.exception(ValueError,'domain.sticky_storage.concurrent_edit')
+        return revision+1
+
+    def resolve_note_conflict(self,identity,revision,text,title,*,code_mode,secret):
+        """Commit an explicitly chosen editor version without racing mode/privacy changes."""
+        if (type(revision) is not int or revision<0 or not isinstance(text,str) or len(text)>100000
+                or not isinstance(title,str) or len(title)>200 or type(code_mode) is not bool
+                or type(secret) is not bool):
+            raise _i18n.exception(ValueError,'domain.sticky_storage.invalid_property')
+        with self.db:
+            cursor=self.db.execute(
+                'UPDATE notes SET text=?,title=?,revision=revision+1 WHERE id=? AND revision=? AND code_mode=? AND secret=?',
+                (text,title,identity,revision,int(code_mode),int(secret)))
+            if cursor.rowcount!=1:raise _i18n.exception(ValueError,'domain.sticky_storage.concurrent_edit')
+        return revision+1
+
+    def set_code_language(self,identity,value,revision):
+        if not isinstance(value,str) or value not in CODE_LANGUAGES or type(revision) is not int or revision<0:
+            raise _i18n.exception(ValueError,'domain.sticky_storage.invalid_property')
+        with self.db:
+            cursor=self.db.execute('UPDATE notes SET code_language=?,revision=revision+1 WHERE id=? AND revision=?',(value,identity,revision))
+            if cursor.rowcount!=1:raise _i18n.exception(ValueError,'domain.sticky_storage.concurrent_edit')
+        return revision+1
+
     secret=set_secret
 
     def delete(self,identity,expected_revision=None):
@@ -642,9 +736,11 @@ class Store:
         return revision+1
 
     def properties(self,identity,**values):
-        if not values or not set(values)<={'color','x','y','width','height','above','archived'}:raise _i18n.exception(ValueError, 'domain.sticky_storage.invalid_property')
+        if not values or not set(values)<={'color','x','y','width','height','above','archived','reduced_opacity'}:raise _i18n.exception(ValueError, 'domain.sticky_storage.invalid_property')
         if 'color' in values and values['color'] not in COLORS:raise _i18n.exception(ValueError, 'domain.sticky_storage.invalid_color')
         for key,value in values.items():
+            if key in ('above','archived','reduced_opacity') and (type(value) is not int or value not in (0,1)):
+                raise _i18n.exception(ValueError, 'domain.sticky_storage.invalid_property')
             if key!='color' and (type(value) is not int or abs(value)>100000):raise _i18n.exception(ValueError, 'domain.sticky_storage.invalid_dimension')
         with self.db:self.db.execute('UPDATE notes SET '+','.join(key+'=?' for key in values)+' WHERE id=?',(*values.values(),identity))
 

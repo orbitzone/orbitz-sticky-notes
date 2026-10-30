@@ -3,6 +3,7 @@ import importlib.util
 import os
 from pathlib import Path
 import sqlite3
+import stat
 import subprocess
 import sys
 import tempfile
@@ -127,3 +128,30 @@ store.close()
             with self.assertRaises(OSError):storage.Store(self.root)
             connect.assert_not_called()
         self.assertEqual(outside.read_text(),'preserved')
+
+    def test_startup_lock_rejects_hardlink_without_chmodding_external_file(self):
+        outside=self.root/'outside';outside.write_text('preserved');outside.chmod(0o640)
+        (self.root/'.startup.lock').hardlink_to(outside)
+        original_mode=stat.S_IMODE(outside.stat().st_mode)
+        with patch.object(storage.sqlite3,'connect') as connect:
+            with self.assertRaisesRegex(OSError,'hard links'):storage.Store(self.root)
+            connect.assert_not_called()
+        self.assertEqual(outside.read_text(),'preserved')
+        self.assertEqual(stat.S_IMODE(outside.stat().st_mode),original_mode)
+
+    def test_instance_lock_rejects_hardlink_without_chmodding_external_file(self):
+        outside=self.root/'outside';outside.write_text('preserved');outside.chmod(0o640)
+        (self.root/'.app-instance.lock').hardlink_to(outside)
+        original_mode=stat.S_IMODE(outside.stat().st_mode)
+        with self.assertRaisesRegex(OSError,'hard links'):
+            storage.InstanceLock(self.root)
+        self.assertEqual(outside.read_text(),'preserved')
+        self.assertEqual(stat.S_IMODE(outside.stat().st_mode),original_mode)
+
+    def test_lock_rejects_file_owned_by_another_user_before_chmod(self):
+        from types import SimpleNamespace
+        wrong_owner=SimpleNamespace(st_mode=stat.S_IFREG|0o600,st_uid=os.geteuid()+1,st_nlink=1)
+        with patch.object(storage.os,'fstat',return_value=wrong_owner),patch.object(storage.os,'fchmod') as chmod:
+            with self.assertRaisesRegex(OSError,'not owned by the current user'):
+                storage.InstanceLock(self.root)
+            chmod.assert_not_called()

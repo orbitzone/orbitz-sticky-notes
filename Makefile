@@ -14,6 +14,7 @@ install:
 	install -Dm644 data/io.orbitz.Postits.metainfo.xml "$(DESTDIR)$(PREFIX)/share/metainfo/io.orbitz.Postits.metainfo.xml"
 	install -Dm644 data/io.orbitz.Postits.gschema.xml "$(DESTDIR)$(PREFIX)/share/glib-2.0/schemas/io.orbitz.Postits.gschema.xml"
 	install -Dm644 LICENSE "$(DESTDIR)$(PREFIX)/share/licenses/orbitz-sticky-notes/LICENSE"
+	install -Dm644 packaging/licenses/GtkSourceView-LGPL-2.1.txt "$(DESTDIR)$(PREFIX)/share/licenses/gtksourceview4/COPYING"
 	glib-compile-schemas "$(DESTDIR)$(PREFIX)/share/glib-2.0/schemas"
 
 test:

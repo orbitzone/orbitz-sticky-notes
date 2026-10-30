@@ -57,3 +57,15 @@ finally:
             fields = [set(field for _, field, _, _ in string.Formatter().parse(catalog[key]) if field)
                       for catalog in catalogs]
             self.assertEqual(*fields, key)
+
+    def test_email_draft_cleanup_error_says_the_note_was_not_deleted(self):
+        catalogs = {locale: json.loads((ROOT/'i18n'/f'{locale}.json').read_text())
+                    for locale in ('pt-BR', 'en-US')}
+        portuguese = catalogs['pt-BR']['sticky.email_cache_cleanup_failed'].format(error='cache unavailable')
+        english = catalogs['en-US']['sticky.email_cache_cleanup_failed'].format(error='cache unavailable')
+        self.assertIn('não foi excluída', portuguese)
+        self.assertIn('cache unavailable', portuguese)
+        self.assertNotIn('excluída, mas', portuguese)
+        self.assertIn('was not deleted', english)
+        self.assertIn('cache unavailable', english)
+        self.assertNotIn('deleted, but', english)

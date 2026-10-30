@@ -17,12 +17,14 @@ class SecretUiTests(TestCase):
         self.gdk=SimpleNamespace(CrossingMode=SimpleNamespace(NORMAL=0),NotifyType=SimpleNamespace(INFERIOR=2))
         tree=ast.parse((ROOT/'sticky-notes/card.py').read_text());cls=next(n for n in tree.body if isinstance(n,ast.ClassDef) and n.name=='Card')
         names={'cancel_secret_timer','secret_activity','secret_enter','secret_leave','secret_tick','lock_secret','unlock_secret','toggle_secret','delete_note','authenticate_secret','show_secret_settings','sync_secret_menu_actions','authorize_secret_edit','set_property_value','restore_size','hide_note','close_requested'}
-        ns=dict(GLib=self.glib,Gdk=self.gdk,ui=ui,sync_title_placeholder=Mock())
+        ns=dict(GLib=self.glib,Gdk=self.gdk,ui=ui,sync_title_placeholder=Mock(),Gtk=SimpleNamespace(),
+            purge_note_email_drafts=Mock())
         exec(compile(ast.Module(body=[n for n in cls.body if isinstance(n,ast.FunctionDef) and n.name in names],type_ignores=[]),'card.py','exec'),ns)
         host=SimpleNamespace(alive=True,note={'id':'synthetic','secret':int(secret)},revision=4,secret_locked=False,secret_timer=0,secret_counting=False,secret_deadline=0,
-            status=Mock(),secret_stack=Mock(),scroll=Mock(),title_field=Mock(),title_entry=Mock(),title_placeholder=Mock(),text=Mock(),unlock_button=Mock(),flush=Mock(return_value=True),clear_link_hover=Mock(),apply_color=Mock(),set_keep_above=Mock(),emoji_dialog=None,attachment_preview_cache={},
+            status=Mock(),secret_stack=Mock(),scroll=Mock(),title_field=Mock(),title_entry=Mock(),title_placeholder=Mock(),text=Mock(),unlock_button=Mock(),flush=Mock(return_value=True),clear_link_hover=Mock(),apply_color=Mock(),set_keep_above=Mock(),update_code_window_title=Mock(),sync_secret_badge=Mock(),save_geometry=Mock(),emoji_dialog=None,attachment_preview_cache={},
             auth_dialog=None,settings_dialog=None,secret_items=[],secret_syncing=False,app=SimpleNamespace(store=Mock(),get_windows=lambda:[]),get_visible=lambda:True,
             error=Mock(),destroy=Mock(),get_allocated_width=lambda:310,get_allocated_height=lambda:300)
+        host.resolve_close_conflict=Mock(return_value=False)
         self.window=object();host.get_window=lambda:self.window
         for key in names:setattr(host,key,MethodType(ns[key],host))
         self.ns=ns
@@ -125,7 +127,7 @@ class SecretUiTests(TestCase):
         self.assertTrue(host.close_requested())
         host.hide_note.assert_called_once_with()
 
-    def test_reopening_a_hidden_secret_window_relocks_before_showing(self):
+    def test_launcher_keeps_hidden_secret_hidden_while_another_note_is_visible(self):
         tree=ast.parse((ROOT/'sticky-notes/postits.py').read_text());cls=next(n for n in tree.body if isinstance(n,ast.ClassDef) and n.name=='Postits')
         node=next(n for n in cls.body if isinstance(n,ast.FunctionDef) and n.name=='activate_cards')
         namespace={};exec(compile(ast.Module(body=[node],type_ignores=[]),'postits.py','exec'),namespace)
@@ -136,14 +138,29 @@ class SecretUiTests(TestCase):
             lock_secret=Mock(),show=Mock(),present=Mock())
         app=SimpleNamespace(store=Mock(),get_windows=lambda:[hidden,visible])
         namespace['activate_cards'](app)
-        self.assertEqual(events,['lock','show','present'])
+        # A hidden note stays hidden while another note is visible; the dropdown
+        # remains its intentional reopen path. The launcher restores notes only
+        # when all windows are hidden.
+        self.assertEqual(events,[])
         visible.lock_secret.assert_not_called()
         visible.show.assert_called_once();visible.present.assert_called_once()
+
+    def test_launcher_restores_all_hidden_notes_and_locks_secret_before_showing(self):
+        tree=ast.parse((ROOT/'sticky-notes/postits.py').read_text());cls=next(n for n in tree.body if isinstance(n,ast.ClassDef) and n.name=='Postits')
+        node=next(n for n in cls.body if isinstance(n,ast.FunctionDef) and n.name=='activate_cards')
+        namespace={};exec(compile(ast.Module(body=[node],type_ignores=[]),'postits.py','exec'),namespace)
+        events=[]
+        hidden=SimpleNamespace(note={'secret':1},get_visible=lambda:False,
+            lock_secret=lambda:events.append('lock'),show=lambda:events.append('show'),present=lambda:events.append('present'))
+        app=SimpleNamespace(store=Mock(),get_windows=lambda:[hidden],fit_monitor=lambda _card,saved=False:events.append(('fit',saved)))
+        namespace['activate_cards'](app)
+        self.assertEqual(events,['lock',('fit',True),'show','present'])
 
     def test_locked_secret_screen_has_only_an_icon_unlock_control(self):
         source=(ROOT/'sticky-notes/card.py').read_text()
         self.assertIn("lock_image=secret_lock_icon()",source)
-        self.assertIn("self.unlock_button=Gtk.EventBox()",source)
+        self.assertIn("self.unlock_button=Gtk.Button()",source)
+        self.assertIn("self.unlock_button.set_can_focus(True)",source)
         self.assertIn("self.unlock_button.add(lock_image)",source)
         self.assertIn("secret-pin.png",source)
         self.assertIn("install -m644 sticky-notes/*.png",(ROOT/'Makefile').read_text())
@@ -197,11 +214,15 @@ class SecretUiTests(TestCase):
         self.assertEqual(struct.unpack('>II',icon[16:24]),(64,64))
         self.assertEqual(icon[25],6)  # RGBA transparency, with no baked background.
 
-    def test_unlock_control_is_not_a_themable_or_focusable_button(self):
+    def test_unlock_control_is_keyboard_focusable_without_mouse_hover_decoration(self):
         source=(ROOT/'sticky-notes/card.py').read_text()
-        self.assertIn('self.unlock_button=Gtk.EventBox();self.unlock_button.set_visible_window(False)',source)
-        self.assertIn('self.unlock_button.set_can_focus(False)',source)
-        self.assertNotIn('sticky-secret-unlock',source)
+        self.assertIn("self.unlock_button=Gtk.Button();self.unlock_button.set_name('sticky-secret-unlock-control')",source)
+        self.assertIn('self.unlock_button.set_focus_on_click(False)',source)
+        self.assertIn('self.unlock_button.set_can_focus(True)',source)
+        self.assertIn("set_name',ui.msg('sticky.secret_unlock_accessible')",source)
+        self.assertIn("set_description',ui.msg('sticky.secret_unlock_keyboard_help')",source)
+        self.assertIn('button#sticky-secret-unlock-control:hover',source)
+        self.assertIn('button#sticky-secret-unlock-control:focus',source)
         self.assertNotIn('unlock_button.grab_focus()',source)
 
     def test_unlock_control_sets_pointer_only_while_hovered_and_click_opens_pin(self):
@@ -214,9 +235,7 @@ class SecretUiTests(TestCase):
         window.set_cursor.reset_mock()
         self.assertFalse(namespace['unlock_pointer_leave'](host));window.set_cursor.assert_called_once_with(None)
         host.unlock_secret=Mock()
-        self.assertTrue(namespace['unlock_pointer_click'](host,None,SimpleNamespace(button=1)));host.unlock_secret.assert_called_once_with()
-        host.unlock_secret.reset_mock()
-        self.assertTrue(namespace['unlock_pointer_click'](host,None,SimpleNamespace(button=3)));host.unlock_secret.assert_not_called()
+        self.assertTrue(namespace['unlock_pointer_click'](host,None));host.unlock_secret.assert_called_once_with()
 
     def test_every_delete_of_secret_requires_fresh_pin_even_when_revealed(self):
         host=self.host();host.authenticate_secret=Mock(return_value=False)
@@ -249,8 +268,8 @@ class SecretUiTests(TestCase):
             def set_active_id(self,value):self.active_id=value
             def get_active_id(self):return self.active_id
             def connect(self,*_args):pass
-        gtk=SimpleNamespace(Dialog=lambda **kw:dialog,Label=lambda **kw:Mock(),Box=lambda **kw:Mock(),
-            ComboBoxText=LanguageCombo,Orientation=SimpleNamespace(HORIZONTAL=0),
+        gtk=SimpleNamespace(Dialog=lambda **kw:dialog,Label=lambda **kw:Mock(),Box=lambda **kw:Mock(),Button=Mock(),
+            ComboBoxText=LanguageCombo,Orientation=SimpleNamespace(HORIZONTAL=0,VERTICAL=1),ReliefStyle=SimpleNamespace(NONE=0),
             ResponseType=SimpleNamespace(CANCEL=0,ACCEPT=1))
         self.ns['Gtk']=gtk
         return dialog,entries

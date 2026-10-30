@@ -9,6 +9,7 @@ import tempfile
 import time
 import unittest
 import shutil
+import stat
 from unittest.mock import patch
 
 ROOT=Path(__file__).resolve().parents[1]
@@ -80,6 +81,19 @@ class StickyDeleteTests(unittest.TestCase):
         self.assertEqual(self.notes.get(note['id']),note)
         self.assertEqual({path.name:path.read_bytes() for path in (self.root/'backups').glob('*.sqlite3')},before)
         self.assertTrue(valid.exists())
+
+    def test_backup_lock_rejects_hardlink_without_chmodding_external_file(self):
+        backup_dir=self.root/'backups';lock=backup_dir/'.lock'
+        lock.unlink()
+        outside=self.root/'external-lock-target';outside.write_text('preserved');outside.chmod(0o640)
+        lock.hardlink_to(outside)
+        original_mode=stat.S_IMODE(outside.stat().st_mode)
+
+        with self.assertRaisesRegex(OSError,'hard links'):
+            self.notes.backup()
+
+        self.assertEqual(outside.read_text(),'preserved')
+        self.assertEqual(stat.S_IMODE(outside.stat().st_mode),original_mode)
 
     def test_partial_snapshot_promotion_keeps_active_note_and_retry_completes_purge(self):
         note=self.notes.all()[0]

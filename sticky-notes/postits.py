@@ -5,7 +5,7 @@ import sys
 import gi
 gi.require_version('Gtk','3.0')
 from gi.repository import Gtk,Gio,GLib,Gdk
-from storage import Store
+from storage import DATA,InstanceAlreadyRunningError,InstanceLock,Store
 
 from card import Card
 from ui_language import ui
@@ -14,7 +14,7 @@ from ui_language import ui
 class Postits(Gtk.Application):
     def __init__(self,store=None):
         super().__init__(application_id='io.orbitz.Postits',flags=Gio.ApplicationFlags.HANDLES_COMMAND_LINE)
-        self.store=store;self.monitor_timer=0
+        self.store=store;self.instance_lock=None;self.monitor_timer=0
         self.connect('activate',self.activate_cards)
         self.connect('command-line',self.command_line)
         self.connect('startup',self.startup_cards)
@@ -41,11 +41,18 @@ class Postits(Gtk.Application):
         quit_action=Gio.SimpleAction.new('quit',None)
         quit_action.connect('activate',lambda *_:self.safe_quit())
         self.add_action(quit_action)
-        if self.store is None:
-            try:self.store=Store()
-            except Exception as error:
-                dialog=ui.widget(Gtk.MessageDialog,message_type=Gtk.MessageType.ERROR,buttons=Gtk.ButtonsType.CLOSE,text=ui.msg('sticky.start_failed'))
-                ui.call(dialog,'format_secondary_text',ui.join('\n',[ui.error_message(error),ui.msg('sticky.files_preserved')]));dialog.run();dialog.destroy();self.quit();return
+        try:
+            data_directory=getattr(self.store,'directory',DATA)
+            self.instance_lock=InstanceLock(data_directory)
+            if self.store is None:self.store=Store(data_directory)
+        except InstanceAlreadyRunningError:
+            dialog=ui.widget(Gtk.MessageDialog,message_type=Gtk.MessageType.WARNING,
+                buttons=Gtk.ButtonsType.CLOSE,text=ui.msg('sticky.already_running_title'))
+            ui.call(dialog,'format_secondary_text',ui.msg('sticky.already_running_body'))
+            dialog.run();dialog.destroy();self.quit();return
+        except Exception as error:
+            dialog=ui.widget(Gtk.MessageDialog,message_type=Gtk.MessageType.ERROR,buttons=Gtk.ButtonsType.CLOSE,text=ui.msg('sticky.start_failed'))
+            ui.call(dialog,'format_secondary_text',ui.join('\n',[ui.error_message(error),ui.msg('sticky.files_preserved')]));dialog.run();dialog.destroy();self.quit();return
         self.screen=Gdk.Screen.get_default()
         self.monitor_signal=self.screen.connect('monitors-changed',self.monitors_changed)
         self.backup_timer=GLib.timeout_add_seconds(3600,self.backup_store)
@@ -155,7 +162,8 @@ class Postits(Gtk.Application):
     def safe_quit(self):
         for card in self.get_windows():
             if not hasattr(card,'flush'):continue
-            if not card.flush():return
+            if not card.flush() and not card.resolve_close_conflict():return
+            if not card.alive:continue
             card.save_geometry()
         self.quit()
 
@@ -168,6 +176,7 @@ class Postits(Gtk.Application):
             if hasattr(card,'save_geometry'):card.save_geometry()
             card.destroy()
         if self.store:self.store.close()
+        if self.instance_lock:self.instance_lock.close();self.instance_lock=None
 
 if __name__=='__main__':
     # Gtk.Application owns single-instance routing and forwards desktop

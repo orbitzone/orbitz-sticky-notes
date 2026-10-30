@@ -93,9 +93,12 @@ class AttachmentUiTests(TestCase):
         gdk.pixbuf_get_from_surface.assert_called_once_with(surface,0,0,139,180)
 
     def test_reused_menu_resynchronizes_attachment_actions_after_secret_unlock(self):
-        ns=methods('card.py','Card',['menu_opened','sync_secret_menu_actions'],{})
+        ns=methods('card.py','Card',['menu_opened','sync_secret_menu_actions'],dict(
+            GLib=SimpleNamespace(timeout_add=Mock(return_value=7))))
         attach=Mock();email=Mock()
-        host=SimpleNamespace(secret_locked=True,attach_menu_item=attach,email_menu_item=email,menu_tooltips=[])
+        host=SimpleNamespace(secret_locked=True,attach_menu_item=attach,email_menu_item=email,
+            refresh_note_menus=Mock(),menu_pointer_state=Mock(return_value=None),menu_button_mask=Mock(return_value=0),
+            watch_menu_outside_click=Mock(),menu_pointer_timer=0,menu_buttons_down=0)
         host.sync_secret_menu_actions=lambda:ns['sync_secret_menu_actions'](host)
         ns['menu_opened'](host)
         attach.set_sensitive.assert_called_with(False);email.set_sensitive.assert_called_with(False)
@@ -213,7 +216,9 @@ class AttachmentUiTests(TestCase):
         source=(ROOT/'sticky-notes/card.py').read_text()
         self.assertIn('outer.set_margin_top(0)',source)
         self.assertIn('header_area.pack_start(self.move_handle,False,False,0)',source)
-        self.assertIn('header_area.pack_start(heading_row,False,False,0)',source)
+        self.assertIn('header_area.pack_start(heading_region,False,False,0)',source)
+        self.assertIn('heading_region=heading_row',source)
+        self.assertIn('if self.code_mode:heading_region=self.wrap_code_drag_region(heading_row)',source)
         self.assertIn('outer.pack_start(header_area,False,False,0)',source)
         self.assertIn("self.move_handle.connect('button-press-event',self.header_drag_press)",source)
         self.assertIn('self.begin_move_drag(1,int(event.x_root),int(event.y_root),event.time)',source)

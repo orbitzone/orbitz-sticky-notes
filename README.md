@@ -1,58 +1,103 @@
-# Sticky Notes - By Orbitz
+# Orbitz Sticky Notes
 
-Notas coloridas e independentes para sua área de trabalho Linux. Escreva, organize por cores, personalize títulos, abra links com Ctrl+clique e mantenha as notas à mão sem instalar uma extensão do GNOME Shell.
+**Keep useful notes right on your Linux desktop.** Orbitz Sticky Notes brings colorful, always-with-you notes and a focused code snippet workspace into one lightweight desktop app—so the details that matter stay close while you work.
 
-Desenvolvido por **Felipe Santiago / orbitzone**. Extraído do [Orbitz Widgets for GNOME](https://github.com/orbitzone/orbitz-widgets-for-gnome), sob GPL-3.0. A versão independente conserva o armazenamento SQLite, conflitos de revisão, backups diários e o bloqueio visual por PIN. **O PIN não criptografa o texto nem os backups.**
+Create a note in seconds, give it a title, choose a color, and place it where it helps your workflow. Switch the same note to **Sticky Code** when you want a clean dark editor for a snippet. With great features and details that matter, it is an awesome, productive companion for daily tasks, planning, quick references, and development work—useful tools that make your workflow feel amazing without getting in the way.
 
-## Instalação Linux com Flatpak
+> **Preview release:** Orbitz Sticky Notes is currently distributed as an x86_64 Flatpak preview. Please review the compatibility and privacy notes below before installing. There is no Flathub listing or automatic update channel yet.
 
-O pacote atende distribuições com Flatpak e sessão X11 ou Wayland com XWayland. Não depende da versão do GNOME Shell. Não há garantia para qualquer versão de Linux: kernel, Flatpak, arquitetura e ambiente gráfico precisam ser compatíveis com o runtime. O primeiro pacote é x86_64; ARM64 ainda não é validado.
+## Useful features
 
-1. [Instale o Flatpak para sua distribuição](https://flatpak.org/setup/).
-2. Baixe `orbitz-sticky-notes-x86_64.flatpak` na [prévia v0.1.0](https://github.com/orbitzone/orbitz-sticky-notes/releases/tag/v0.1.0). É uma versão para testes; ainda não há publicação no Flathub nem canal de atualização automática.
-3. No diretório do pacote, execute:
+- **Colorful desktop notes** with editable titles, rich-text shortcuts, emoji picker, links, move and resize controls.
+- **Sticky Code** transforms a note into a dark code editor while keeping its title and content in the same note. It includes syntax highlighting, line numbers, indentation, language selection, and one-click code copying. The app does not execute code.
+- **A smoother workflow** with hidden and archived notes, keyboard shortcuts, per-note opacity, and desktop launcher actions.
+- **Private-by-default local storage:** notes and daily backups stay on your computer. Optional PIN locking hides secret notes from view.
+- **Attachments and previews** for common image and PDF files, plus a handoff to your default email application with the note and selected attachments.
+- **English and Brazilian Portuguese** interface options.
+
+Details that matter: closing a note hides it; it does not delete it. Permanent deletion is a separate menu action. Resizing changes the available text area while the font stays the same. Long content scrolls within the note or code editor.
+
+## Install the Linux preview
+
+The current preview package targets **x86_64** and the GNOME 49 Flatpak runtime. It uses GTK 3 with the X11 socket; a Wayland session therefore needs XWayland. Window management, portal, and accessibility workflows still need desktop-specific testing. The app does not depend on a particular GNOME Shell extension version, but window placement and “always on top” behavior vary by desktop environment and window manager.
+
+1. Install Flatpak for your distribution using the [Flatpak setup guide](https://flatpak.org/setup/).
+2. Download `orbitz-sticky-notes-x86_64.flatpak` from the [v0.1.0 preview release](https://github.com/orbitzone/orbitz-sticky-notes/releases/tag/v0.1.0).
+3. In the download folder, install and launch it:
 
 ```sh
-flatpak remote-add --user --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
 flatpak install --user ./orbitz-sticky-notes-x86_64.flatpak
 flatpak run io.orbitz.Postits
 ```
 
-O aplicativo também aparece no menu. Para atualizar, instale um novo pacote pelo mesmo comando. Não é necessário reiniciar o GNOME; encerre o aplicativo pelo menu da nota e reabra após atualizar. Não habilitamos início automático no login.
-
-O pacote x86_64 passou por build e smoke de importação no sandbox; os 90 testes passaram no CI Ubuntu 24.04 com display virtual, incluindo os dois smokes GTK antes indisponíveis localmente. Isso ainda não equivale a homologação visual em GNOME/KDE/Xfce reais. O arquivo `SHA256SUMS` da release permite conferir o download com `sha256sum -c SHA256SUMS`.
-
-## Uso e dados
-
-- Clique e escreva; título editável e seis cores.
-- Ctrl+B aplica negrito, Ctrl+I itálico, Ctrl+U sublinhado e Ctrl+E abre o seletor de emoji. Com texto selecionado, o atalho alterna a formatação; sem seleção, ativa o estilo para o próximo texto digitado.
-- Dicas de texto foram removidas. Ao passar sobre imagens e PDFs anexados, ainda aparece a miniatura visual personalizada.
-- Ctrl+N cria nota; Ctrl+Z / Ctrl+Shift+Z desfaz/refaz; Ctrl+H oculta. Fechar a nota também a oculta, sem excluir seu conteúdo.
-- Arraste a faixa compacta acima do título para mover a nota. Arraste o canto inferior para redimensionar. O menu fecha ao clicar fora.
-- O menu permite reexibir notas ocultas e arquivar a nota atual. Notas ocultas e arquivadas aparecem como títulos em listas suspensas; selecionar uma nota oculta a reabre, e selecionar uma arquivada a restaura. Títulos de notas secretas ficam ocultos nessas listas.
-- A exclusão permanente só está disponível no menu da nota e remove a nota imediatamente. Fechar ou ocultar nunca exclui uma nota.
-- O menu permite anexar arquivos; também é possível arrastá-los sobre o texto da nota sem inserir o caminho no conteúdo. Os ícones ficam no rodapé: clique para abrir; clique com o botão direito para mostrar a pasta de origem ou remover o vínculo da nota. São aceitos formatos comuns de imagem, texto, PDF, Microsoft Office, OpenDocument/OpenOffice e arquivos ZIP, RAR, 7z, TAR e compactados. Cada nota aceita até 10 arquivos, 50 MiB por arquivo e 100 MiB no total.
-- “Enviar nota por e-mail” abre um rascunho no cliente padrão, com o texto no corpo e os anexos selecionados. O app não envia a mensagem; revise e envie no cliente de e-mail. Em sistemas com portal de e-mail antigo, o app usa o portal de abertura de links para entregar os anexos ao cliente padrão.
-- Notas secretas se bloqueiam ao reabrir, ao ocultar/fechar a nota e após 15 segundos com o ponteiro fora. Enquanto bloqueadas, o conteúdo e os anexos ficam ocultos e alterações no texto, título, cor, tamanho, anexos ou ordem das janelas exigem o PIN; o cadeado central abre o diálogo de desbloqueio. Movimentos feitos pelo gerenciador de janelas não são salvos enquanto a nota está bloqueada. O PIN é uma barreira da interface, não criptografa os dados. Em Configurações, “Esqueci meu PIN” solicita confirmação e então apaga todas as notas secretas e seus registros nos backups para permitir definir outro PIN; as notas comuns são preservadas.
-- No Flatpak, banco e backups ficam em `~/.var/app/io.orbitz.Postits/data/orbitz-postits/`. Não apagamos os dados ao atualizar. A instalação antiga do Orbitz permanece intacta; não há importação automática. Evite executar as duas versões ao mesmo tempo, pois compartilham o ID de aplicação.
-- Anexos permanecem nas pastas escolhidas; o app grava caminhos e nomes no banco e nos backups, sem apagar os arquivos originais. No Flatpak, a seleção usa o portal de arquivos e concede acesso aos arquivos escolhidos. Se um arquivo for movido ou apagado, remova e adicione o anexo novamente. Excluir a nota remove os vínculos, os metadados dos backups e os rascunhos temporários do Orbitz associados a ela; cópias já abertas em outros aplicativos ficam fora do controle do app.
-- PT-BR é o idioma padrão. Para inglês: `flatpak run --env=ORBITZ_LOCALE=en-US io.orbitz.Postits`. Configurações de idioma do Orbitz Widgets não são usadas.
-
-## Compatibilidade e privacidade
-
-O pacote usa GTK 3 via X11, inclusive em sessões Wayland com XWayland. Sessões sem XWayland não são suportadas nesta versão. Posição, manter acima e presença em todos os espaços dependem do gerenciador de janelas. Testes em GNOME, KDE e Xfce, escalas mistas e monitores reais ainda devem compor a matriz de validação; build/testes automatizados não comprovam esse comportamento visual.
-
-O Flatpak não recebe acesso geral à pasta pessoal nem à rede. Acesso X11 é necessário para o comportamento atual das janelas e tem o isolamento limitado próprio desse protocolo. Links web/e-mail usam o aplicativo padrão por Gio/portal; caminhos locais fora do sandbox não estão disponíveis sem seleção explícita. O PIN protege apenas a interface: textos, títulos, caminhos e nomes dos anexos permanecem sem criptografia no SQLite e nos backups. Os arquivos anexados continuam sob as permissões da pasta de origem. Não há sincronização, telemetria ou migração automática de dados.
-
-## Compilar e desenvolver
-
-Instale `flatpak-builder`, Flatpak e o remoto Flathub. Na raiz:
+If prompted to add the Flathub runtime source, follow Flatpak's prompt or add it with:
 
 ```sh
+flatpak remote-add --user --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
+```
+
+To verify a release download, use the accompanying `SHA256SUMS` file:
+
+```sh
+sha256sum -c SHA256SUMS
+```
+
+Updates are not automatic yet. Install a newer release package when one is published. Your notes are kept when the app is updated.
+
+## Privacy and storage
+
+The Flatpak stores its database and backups under:
+
+```text
+~/.var/app/io.orbitz.Postits/data/orbitz-postits/
+```
+
+The PIN is a **visual privacy lock**, not encryption. Note titles, text, attachment names, paths, and backups are not encrypted in the local database. Do not use secret notes as a substitute for encrypted storage. Resetting a forgotten PIN permanently deletes secret notes so a new PIN can be set; ordinary notes are preserved.
+
+Attachments remain in their original folders. Orbitz stores their paths and names, and does not delete the original files when a note or attachment link is removed. The app asks for access to files you select; it does not request general access to your home folder or network. Email drafts are opened in your system's default email application for you to review and send.
+
+## Compatibility and current limits
+
+- Linux desktop with Flatpak, the GNOME 49 runtime, and an X11 display; a Wayland session needs XWayland.
+- The published preview is x86_64. ARM builds and other architectures have not been validated.
+- Native Wayland-only sessions without XWayland are not supported by this build.
+- Window positions, workspace behavior, and always-on-top support depend on the desktop environment.
+- Automated CI checks and GTK tests run in a virtual display; they are not a substitute for visual testing on GNOME, KDE, and Xfce hardware setups.
+- Email handoff depends on the desktop portal and installed email client. Check the release notes for the latest tested combinations.
+
+## Keyboard shortcuts
+
+| Shortcut | Action |
+| --- | --- |
+| `Ctrl+N` | Create a note |
+| `Ctrl+H` | Hide the current note |
+| `Ctrl+0` | Restore the default note size |
+| `Ctrl+B` / `Ctrl+I` / `Ctrl+U` | Bold / italic / underline selected text |
+| `Ctrl+E` | Open the emoji picker |
+| `Ctrl+Z` / `Ctrl+Shift+Z` | Undo / redo |
+| `Ctrl+click` | Open a link |
+| `Esc` | Close transient popups; lock an unlocked secret note while editing |
+
+The **Shortcuts** item in the note menu shows the shortcuts available in the installed version.
+
+## Build from source
+
+Requirements: Flatpak, Flatpak Builder, and the Flathub runtime repository. From the repository root:
+
+```sh
+flatpak remote-add --user --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
 flatpak-builder --user --install-deps-from=flathub --assumeyes --repo=repo build-dir packaging/io.orbitz.Postits.json
 flatpak build-bundle repo orbitz-sticky-notes-x86_64.flatpak io.orbitz.Postits --runtime-repo=https://dl.flathub.org/repo/flathub.flatpakrepo
 ```
 
-Para desenvolvimento nativo: Python 3.10+, PyGObject, GTK 3.24 e SQLite. Execute `python3 sticky-notes/postits.py` em sessão gráfica; isso usa o diretório nativo `~/.local/share/orbitz-postits/` (ou `$XDG_DATA_HOME/orbitz-postits/`). Use um `XDG_DATA_HOME` temporário para testes. `make test` executa a suíte com bancos temporários. `make install PREFIX=/caminho` é para empacotadores; o instalador recomendado ao usuário é Flatpak.
+For native development, install Python 3, PyGObject, GTK 3, GtkSourceView 4, and SQLite, then run `python3 sticky-notes/postits.py` from a graphical session. Set `XDG_DATA_HOME` to a temporary directory when developing or testing to keep test data separate from your personal notes. Run the test suite with `make test`.
 
-Veja [a origem e o estado de validação](docs/validation.md).
+## Project and community
+
+Orbitz Sticky Notes is developed by **Felipe Santiago / orbitzone** and licensed under **GPL-3.0-only**. GtkSourceView is distributed under LGPL-2.1-or-later; its license is included with the package.
+
+- [Source code](https://github.com/orbitzone/orbitz-sticky-notes)
+- [Issues and feature requests](https://github.com/orbitzone/orbitz-sticky-notes/issues)
+- [Preview downloads](https://github.com/orbitzone/orbitz-sticky-notes/releases)
+
+Have an idea that would make your Linux workflow more useful? Open an issue with your desktop environment, Flatpak version, and steps to reproduce the behavior.

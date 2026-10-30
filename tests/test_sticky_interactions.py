@@ -32,29 +32,43 @@ class InteractionTests(TestCase):
         key_names={98:'b',105:'i',117:'u',101:'e'}
         gdk=SimpleNamespace(ModifierType=SimpleNamespace(CONTROL_MASK=1),keyval_name=lambda key:key_names.get(key))
         ns=methods('card.py','Card',['text_format_key_press','key_press'],dict(Gdk=gdk))
-        text=Mock();host=SimpleNamespace(secret_locked=False,text=text,toggle_format=Mock(return_value=True))
+        text=Mock();host=SimpleNamespace(secret_locked=False,code_mode=False,text=text,toggle_format=Mock(return_value=True))
         for key,style in ((98,'bold'),(105,'italic'),(117,'underline')):
             self.assertTrue(ns['text_format_key_press'](host,text,SimpleNamespace(state=1,keyval=key)))
             host.toggle_format.assert_called_with(style)
         self.assertTrue(ns['text_format_key_press'](host,text,SimpleNamespace(state=1,keyval=101)))
         text.emit.assert_called_once_with('insert-emoji')
-        app_host=SimpleNamespace(secret_locked=False,secret_activity=Mock(),app=Mock())
+        app_host=SimpleNamespace(secret_locked=False,note={'secret':False},secret_activity=Mock(),app=Mock())
         self.assertFalse(ns['key_press'](app_host,None,SimpleNamespace(keyval=98,state=1)))
 
     def deletion(self,response=1):
-        ns=methods('card.py','Card',['delete_note'],dict())
+        purge=Mock()
+        ns=methods('card.py','Card',['delete_note'],dict(ui=ui,purge_note_email_drafts=purge))
         host=SimpleNamespace(alive=True,flush=Mock(return_value=True),app=SimpleNamespace(store=Mock()),note={'id':'synthetic'},revision=7,destroy=Mock(),text=Mock(),error=Mock())
-        return ns['delete_note'],host,None
+        return ns['delete_note'],host,purge
 
     def test_delete_menu_action_deletes_immediately_after_save(self):
-        fn,host,_=self.deletion();self.assertTrue(fn(host))
-        self.assertEqual(host.flush.call_count,1);host.app.store.delete.assert_called_once_with('synthetic',7);host.destroy.assert_called_once()
+        fn,host,purge=self.deletion();events=[]
+        purge.side_effect=lambda identities:events.append(('purge',identities))
+        host.app.store.delete.side_effect=lambda identity,revision:events.append(('delete',identity,revision))
+        self.assertTrue(fn(host))
+        self.assertEqual(host.flush.call_count,1)
+        self.assertEqual(events,[('purge',['synthetic']),('delete','synthetic',7)])
+        host.destroy.assert_called_once()
+
+    def test_email_draft_purge_failure_cancels_note_deletion(self):
+        fn,host,purge=self.deletion();purge.side_effect=OSError('cache unavailable')
+        self.assertFalse(fn(host))
+        purge.assert_called_once_with(['synthetic'])
+        host.app.store.delete.assert_not_called();host.destroy.assert_not_called();host.error.assert_called_once()
 
     def test_delete_failed_cas_or_flush_preserves_window(self):
-        fn,host,_=self.deletion();host.app.store.delete.side_effect=ValueError('conflict')
+        fn,host,purge=self.deletion();host.app.store.delete.side_effect=ValueError('conflict')
         self.assertFalse(fn(host));host.destroy.assert_not_called();host.error.assert_called_once()
-        fn,host,_=self.deletion();host.flush.return_value=False
+        purge.assert_called_once_with(['synthetic'])
+        fn,host,purge=self.deletion();host.flush.return_value=False
         self.assertFalse(fn(host));host.app.store.delete.assert_not_called()
+        purge.assert_not_called()
 
     def test_title_and_text_save_in_revision_order_and_title_is_per_note(self):
         ns=methods('card.py','Card',['flush','title_changed'],dict())
@@ -113,6 +127,42 @@ class InteractionTests(TestCase):
         host.authorize_secret_edit.return_value=False;host.begin_move_drag.reset_mock()
         self.assertTrue(ns['header_drag_press'](host,None,event));host.begin_move_drag.assert_not_called()
 
+    def test_keyboard_move_and_resize_modes_use_arrows_shift_steps_and_restore_status(self):
+        ns=methods('card.py','Card',['keyboard_geometry_key_press'],dict(ui=ui,
+            Gdk=SimpleNamespace(keyval_name=lambda value:value,
+                ModifierType=SimpleNamespace(SHIFT_MASK=1))))
+        host=SimpleNamespace(keyboard_geometry_mode=None,keyboard_geometry_previous_status=None,
+            authorize_secret_edit=Mock(return_value=True),status=Mock(),note={'secret':False},
+            secret_locked=False,code_mode=False,get_position=Mock(return_value=(100,200)),
+            move=Mock(),get_size=Mock(return_value=(300,240)),resize=Mock(),save_geometry=Mock(),
+            lock_secret=Mock())
+        host.status.get_text.return_value='saved status';host.status.get_visible.return_value=False
+        key=lambda name,state=0:SimpleNamespace(keyval=name,state=state)
+        self.assertTrue(ns['keyboard_geometry_key_press'](host,None,key('Return'),'move'))
+        self.assertEqual(host.keyboard_geometry_mode,'move');host.status.show.assert_called_once()
+        self.assertTrue(ns['keyboard_geometry_key_press'](host,None,key('Right',1),'move'))
+        host.move.assert_called_once_with(110,200)
+        self.assertTrue(ns['keyboard_geometry_key_press'](host,None,key('Escape'),'move'))
+        host.save_geometry.assert_called_once_with();host.status.set_text.assert_called_with('saved status')
+        host.status.hide.assert_called_once();self.assertIsNone(host.keyboard_geometry_mode)
+
+        self.assertTrue(ns['keyboard_geometry_key_press'](host,None,key('space'),'resize'))
+        self.assertTrue(ns['keyboard_geometry_key_press'](host,None,key('Down'),'resize'))
+        host.resize.assert_called_once_with(300,241)
+        self.assertTrue(ns['keyboard_geometry_key_press'](host,None,key('Return'),'resize'))
+        self.assertEqual(host.save_geometry.call_count,2)
+
+    def test_secret_geometry_keyboard_mode_requires_pin_authorization(self):
+        ns=methods('card.py','Card',['keyboard_geometry_key_press'],dict(ui=ui,
+            Gdk=SimpleNamespace(keyval_name=lambda value:value,
+                ModifierType=SimpleNamespace(SHIFT_MASK=1))))
+        host=SimpleNamespace(keyboard_geometry_mode=None,keyboard_geometry_previous_status=None,
+            authorize_secret_edit=Mock(return_value=False),status=Mock(),note={'secret':True},
+            secret_locked=True,code_mode=False,move=Mock(),resize=Mock(),save_geometry=Mock())
+        handled=ns['keyboard_geometry_key_press'](host,None,SimpleNamespace(keyval='Return',state=0),'move')
+        self.assertTrue(handled);host.authorize_secret_edit.assert_called_once_with()
+        self.assertIsNone(host.keyboard_geometry_mode);host.move.assert_not_called();host.resize.assert_not_called()
+
     def test_menu_has_no_drag_delete_help_item(self):
         source=(ROOT/'sticky-notes/card.py').read_text()
         self.assertNotIn('Shift+arraste',source)
@@ -134,26 +184,47 @@ class InteractionTests(TestCase):
         gdk=SimpleNamespace(keyval_name=lambda key:key,ModifierType=SimpleNamespace(CONTROL_MASK=4))
         glib=SimpleNamespace(source_remove=Mock())
         ns=methods('card.py','Card',['key_press','destroyed'],dict(Gdk=gdk,GLib=glib))
-        host=SimpleNamespace(app=Mock(),alive=True,emoji_dialog=Mock(),history_timer=3,geometry_timer=4)
+        host=SimpleNamespace(app=Mock(),alive=True,secret_locked=False,note={'secret':False},emoji_dialog=Mock(),history_timer=3,geometry_timer=4)
         self.assertFalse(ns['key_press'](host,None,SimpleNamespace(keyval='Escape',state=0)))
         ns['destroyed'](host)
         self.assertFalse(host.alive);host.emoji_dialog.destroy.assert_called_once()
         self.assertEqual([call.args[0] for call in glib.source_remove.call_args_list],[3,4])
         self.assertEqual((host.history_timer,host.geometry_timer),(0,0))
 
-    def test_native_emoji_uses_roomy_transient_root_and_restores_saved_cursor(self):
-        dialog=Mock();signals={};dialog.connect.side_effect=lambda name,fn:signals.update({name:fn})
-        anchor=Mock();buffer_signals={};anchor.get_buffer.return_value.connect.side_effect=lambda name,fn:buffer_signals.update({name:fn})
+    def test_emoji_popup_is_clamped_and_escape_restores_saved_cursor(self):
+        popup=Mock();signals={};popup.connect.side_effect=lambda name,fn:signals.update({name:fn})
+        grid=Mock();button=Mock();buttons=[]
+        def make_button():buttons.append(button);return button
+        rectangle=SimpleNamespace(x=0,y=0,width=0,height=0)
+        workarea=SimpleNamespace(x=0,y=0,width=640,height=480)
+        monitor=SimpleNamespace(get_workarea=lambda:workarea)
+        window=Mock();window.get_origin.return_value=(True,100,200)
+        text=Mock();text.get_iter_location.return_value=SimpleNamespace(x=4,y=5,width=8,height=16)
+        text.buffer_to_window_coords.return_value=(4,5);text.get_window.return_value=window
+        display=SimpleNamespace(get_monitor_at_point=Mock(return_value=monitor),get_primary_monitor=lambda:monitor)
+        gtk=SimpleNamespace(Window=SimpleNamespace(new=Mock(return_value=popup)),WindowType=SimpleNamespace(TOPLEVEL=1),
+            WindowPosition=SimpleNamespace(NONE=0),Grid=Mock(return_value=grid),Button=Mock(side_effect=make_button),
+            Label=Mock(return_value=Mock()),Align=SimpleNamespace(CENTER=1),ReliefStyle=SimpleNamespace(NONE=0),TextWindowType=SimpleNamespace(WIDGET=0),
+            CssProvider=Mock(return_value=Mock()),STYLE_PROVIDER_PRIORITY_USER=1)
+        popup.get_preferred_width.return_value=(0,220);popup.get_preferred_height.return_value=(0,160)
+        gdk=SimpleNamespace(WindowTypeHint=SimpleNamespace(POPUP_MENU=1),Rectangle=lambda:rectangle,
+            Display=SimpleNamespace(get_default=lambda:display),keyval_name=lambda key:key)
         callbacks=[]
-        gtk=SimpleNamespace(Dialog=lambda **kw:dialog,TextView=lambda:anchor,Align=SimpleNamespace(CENTER=1),ResponseType=SimpleNamespace(CANCEL=0))
-        ns=methods('card.py','Card',['insert_emoji'],dict(Gtk=gtk,ui=ui,GLib=SimpleNamespace(idle_add=lambda fn:callbacks.append(fn)),Gdk=SimpleNamespace(keyval_name=lambda key:key)))
-        host=SimpleNamespace(emoji_dialog=None,alive=True,buffer=Mock(),text=Mock(),present=Mock())
+        ns=methods('card.py','Card',['insert_emoji'],dict(Gtk=gtk,ui=ui,Gdk=gdk,
+            GLib=SimpleNamespace(idle_add=lambda fn:callbacks.append(fn))))
+        mark=object();buffer=Mock();buffer.create_mark.return_value=mark
+        buffer.get_iter_at_mark.return_value='saved-cursor'
+        host=SimpleNamespace(emoji_dialog=None,alive=True,secret_locked=False,buffer=buffer,text=text)
         editor=Mock();ns['insert_emoji'](host,editor)
-        editor.stop_emission_by_name.assert_called_once_with('insert-emoji');dialog.set_default_size.assert_called_once_with(480,440)
-        callbacks.pop(0)();anchor.grab_focus.assert_called_once();anchor.emit.assert_called_once_with('insert-emoji')
-        chosen=Mock();chosen.get_text.return_value='😀';buffer_signals['changed'](chosen)
-        host.buffer.insert.assert_called_once();signals['destroy'](dialog)
-        host.buffer.place_cursor.assert_called_once();host.text.grab_focus.assert_called_once();host.buffer.delete_mark.assert_called_once()
+        editor.stop_emission_by_name.assert_called_once_with('insert-emoji')
+        popup.set_default_size.assert_called_once_with(228,168)
+        # The anchor is clamped to the monitor work area even if the note is near an edge.
+        x,y=popup.move.call_args.args;self.assertEqual((x,y),(104,223))
+        self.assertEqual(len(buttons),48)
+        self.assertTrue(signals['key-press-event'](popup,SimpleNamespace(keyval='Escape')))
+        signals['destroy'](popup)
+        buffer.place_cursor.assert_called_once_with('saved-cursor')
+        text.grab_focus.assert_called_once_with();buffer.delete_mark.assert_called_once_with(mark)
         self.assertIsNone(host.emoji_dialog)
 
 try:
@@ -180,10 +251,31 @@ class NativeEmojiSmoke(TestCase):
             host.text.connect('insert-emoji',lambda editor:ns['insert_emoji'](host,editor))
             host.text.emit('insert-emoji');drain()
             dialog=host.emoji_dialog;self.assertTrue(dialog.get_mapped())
-            self.assertGreaterEqual(dialog.get_allocated_width(),480)
-            anchor=dialog.get_content_area().get_children()[0]
-            self.assertTrue(anchor.get_mapped());self.assertEqual(anchor.get_opacity(),1)
-            anchor.get_buffer().insert_at_cursor('😀');drain()
+            grid=dialog.get_child()
+            self.assertGreater(dialog.get_allocated_width(),0)
+            coordinates=grid.translate_coordinates(dialog,0,0)
+            self.assertIsNotNone(coordinates)
+            if len(coordinates)==3:
+                translated,grid_x,grid_y=coordinates
+                self.assertTrue(translated)
+            else:
+                grid_x,grid_y=coordinates
+            self.assertGreaterEqual(grid_x,0);self.assertGreaterEqual(grid_y,0)
+            self.assertLessEqual(grid_x+grid.get_allocated_width(),dialog.get_allocated_width())
+            self.assertLessEqual(grid_y+grid.get_allocated_height(),dialog.get_allocated_height())
+            for row in range(6):
+                for column in range(8):
+                    button=grid.get_child_at(column,row)
+                    self.assertIsNotNone(button)
+                    self.assertTrue(button.get_mapped())
+                    allocation=button.get_allocation()
+                    self.assertGreaterEqual(allocation.x,0)
+                    self.assertGreaterEqual(allocation.y,0)
+                    self.assertLessEqual(allocation.x+allocation.width,grid.get_allocated_width(),
+                        f'emoji at {column},{row} exceeds grid: {allocation.x}+{allocation.width}>{grid.get_allocated_width()}')
+                    self.assertLessEqual(allocation.y+allocation.height,grid.get_allocated_height(),
+                        f'emoji at {column},{row} exceeds grid: {allocation.y}+{allocation.height}>{grid.get_allocated_height()}')
+            grid.get_child_at(0,0).clicked();drain()
             self.assertIsNone(host.emoji_dialog)
             self.assertEqual(host.buffer.get_text(host.buffer.get_start_iter(),host.buffer.get_end_iter(),True),'A😀B')
             self.assertEqual(host.buffer.get_iter_at_mark(host.buffer.get_insert()).get_offset(),2)
