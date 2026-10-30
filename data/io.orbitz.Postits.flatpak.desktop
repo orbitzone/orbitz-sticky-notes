@@ -1,0 +1,29 @@
+[Desktop Entry]
+Type=Application
+Name=Sticky Notes - By Orbitz
+Name[en_US]=Sticky Notes - By Orbitz
+Name[pt_BR]=Sticky Notes - By Orbitz
+Comment=Keep your notes close at hand
+Comment[pt_BR]=Mantenha suas notas sempre por perto
+Exec=flatpak run io.orbitz.Postits
+Icon=io.orbitz.Postits
+Terminal=false
+Categories=Utility;TextTools;
+StartupNotify=true
+StartupWMClass=io.orbitz.Postits
+Actions=NewNote;OpenHiddenNotes;CloseNotes;
+
+[Desktop Action NewNote]
+Name=New note
+Name[pt_BR]=Nova nota
+Exec=flatpak run io.orbitz.Postits --new-note
+
+[Desktop Action OpenHiddenNotes]
+Name=Open hidden notes
+Name[pt_BR]=Abrir notas ocultas
+Exec=flatpak run io.orbitz.Postits --open-hidden-notes
+
+[Desktop Action CloseNotes]
+Name=Close notes
+Name[pt_BR]=Fechar notas
+Exec=flatpak run io.orbitz.Postits --close-notes

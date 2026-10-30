@@ -98,5 +98,20 @@
   "sticky.pin_retry": "Too many attempts. Wait {seconds}s before trying again.",
   "sticky.language": "Interface language",
   "sticky.language_pt_br": "Português (Brasil)",
-  "sticky.language_en_us": "English (United States)"
+  "sticky.language_en_us": "English (United States)",
+  "sticky.shortcuts": "Shortcuts",
+  "sticky.shortcuts_title": "Application shortcuts",
+  "sticky.shortcuts_close": "Close",
+  "sticky.shortcut_new_note": "Create a new note",
+  "sticky.shortcut_hide_note": "Hide note",
+  "sticky.shortcut_restore_size": "Restore note size",
+  "sticky.shortcut_save": "Save note",
+  "sticky.shortcut_undo": "Undo",
+  "sticky.shortcut_redo": "Redo",
+  "sticky.shortcut_bold": "Bold",
+  "sticky.shortcut_italic": "Italic",
+  "sticky.shortcut_underline": "Underline",
+  "sticky.shortcut_emoji": "Insert emoji",
+  "sticky.shortcut_lock_secret": "Close menu or lock a secret note",
+  "sticky.shortcut_open_link": "Open a link, folder or email in the default app"
 }

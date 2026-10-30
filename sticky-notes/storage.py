@@ -416,6 +416,11 @@ class Store:
         if row is None:raise _i18n.exception(ValueError, 'domain.sticky_storage.note_not_found')
         return dict(row)
 
+    def note_number(self,identity):
+        row=self.db.execute('SELECT rowid FROM notes WHERE id=?',(identity,)).fetchone()
+        if row is None:raise _i18n.exception(ValueError, 'domain.sticky_storage.note_not_found')
+        return int(row[0])
+
     def create(self,x=100,y=100):
         identity=str(uuid.uuid4())
         with self.db:self.db.execute('INSERT INTO notes(id,text,color,x,y) VALUES(?,?,?,?,?)',(identity,'',COLORS[0],x,y))

@@ -98,5 +98,20 @@
   "sticky.pin_retry": "Muitas tentativas. Aguarde {seconds}s antes de tentar novamente.",
   "sticky.language": "Idioma da interface",
   "sticky.language_pt_br": "Português (Brasil)",
-  "sticky.language_en_us": "English (United States)"
+  "sticky.language_en_us": "English (United States)",
+  "sticky.shortcuts": "Atalhos",
+  "sticky.shortcuts_title": "Atalhos do aplicativo",
+  "sticky.shortcuts_close": "Fechar",
+  "sticky.shortcut_new_note": "Criar nova nota",
+  "sticky.shortcut_hide_note": "Ocultar nota",
+  "sticky.shortcut_restore_size": "Restaurar tamanho da nota",
+  "sticky.shortcut_save": "Salvar nota",
+  "sticky.shortcut_undo": "Desfazer",
+  "sticky.shortcut_redo": "Refazer",
+  "sticky.shortcut_bold": "Negrito",
+  "sticky.shortcut_italic": "Itálico",
+  "sticky.shortcut_underline": "Sublinhado",
+  "sticky.shortcut_emoji": "Inserir emoji",
+  "sticky.shortcut_lock_secret": "Fechar menu ou bloquear nota secreta",
+  "sticky.shortcut_open_link": "Abrir link, pasta ou e-mail no aplicativo padrão"
 }

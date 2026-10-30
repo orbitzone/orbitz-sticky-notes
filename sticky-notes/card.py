@@ -139,9 +139,11 @@ class Card(Gtk.ApplicationWindow):
         self.attachment_preview_cache={}
         self.secret_counting=False;self.auth_dialog=None;self.settings_dialog=None;self.secret_items=[];self.secret_edit_menu_items=[];self.secret_syncing=False
         self.dirty=False;self.loading=False;self.history=[self.saved];self.index=0
-        self.history_timer=0;self.geometry_timer=0;self.alive=True;self.pending_restore=False
+        self.history_timer=0;self.geometry_timer=0;self.menu_pointer_timer=0;self.menu_buttons_down=0;self.alive=True;self.pending_restore=False
         self._rounded_shape_size=None
-        self.set_decorated(False);self.set_skip_taskbar_hint(True)
+        # Keep the note grouped under the app icon in GNOME Dash so the
+        # launcher shows its running indicator whenever a note is visible.
+        self.set_decorated(False);self.set_skip_taskbar_hint(False)
         self.set_default_size(note['width'],note['height']);self.set_size_request(220,160)
         self.set_focus_on_map(False);self.set_keep_above(bool(note['above']));self.stick()
         visual=self.get_screen().get_rgba_visual()
@@ -175,6 +177,13 @@ class Card(Gtk.ApplicationWindow):
         ui.call(self.menu_button.get_accessible(),'set_name',ui.msg('sticky.note_menu'))
         heading_row=Gtk.Box(spacing=8)
         heading_row.pack_start(header,False,False,0)
+        self.secret_badge=Gtk.DrawingArea()
+        self.secret_badge.set_name('sticky-secret-lock')
+        self.secret_badge.set_no_show_all(True)
+        self.secret_badge.set_can_focus(False);self.secret_badge.set_size_request(16,18)
+        self.secret_badge.connect('draw',self.draw_secret_badge)
+        ui.call(self.secret_badge.get_accessible(),'set_name',ui.msg('sticky.secret_note'))
+        heading_row.pack_start(self.secret_badge,False,False,0)
         self.title_entry=Gtk.Entry()
         self.title_entry.set_name('sticky-note-title')
         self.title_entry.set_text(self.saved_title)
@@ -190,6 +199,7 @@ class Card(Gtk.ApplicationWindow):
         title_field.set_overlay_pass_through(self.title_placeholder,True)
         sync_title_placeholder(self.title_entry,self.title_placeholder)
         self.title_entry.connect('changed',self.title_changed)
+        self.title_entry.connect('key-press-event',self.secret_escape_press)
         self.title_entry.connect('activate',lambda *_:self.flush())
         self.title_entry.connect('focus-out-event',self.focus_out)
         heading_row.pack_start(title_field,True,True,0)
@@ -255,6 +265,7 @@ class Card(Gtk.ApplicationWindow):
         self.text.connect('populate-popup',self.populate_popup)
         self.text.connect('button-press-event',self.text_press)
         self.text.connect('key-press-event',self.text_format_key_press)
+        self.text.connect('key-press-event',self.secret_escape_press)
         self.text.add_events(Gdk.EventMask.POINTER_MOTION_MASK|Gdk.EventMask.ENTER_NOTIFY_MASK|Gdk.EventMask.LEAVE_NOTIFY_MASK)
         self.text.connect('motion-notify-event',self.link_motion)
         self.text.connect('enter-notify-event',self.link_motion)
@@ -264,6 +275,8 @@ class Card(Gtk.ApplicationWindow):
         self.add_options(self.options_menu)
         self.options_menu.show_all()
         self.options_menu.connect('show',lambda *_:self.menu_opened())
+        self.options_menu.connect('hide',self.menu_closed)
+        self.options_menu.connect('key-press-event',self.menu_escape_press)
         self.menu_button.set_popup(self.options_menu)
         self.add_events(Gdk.EventMask.ENTER_NOTIFY_MASK|Gdk.EventMask.LEAVE_NOTIFY_MASK)
         self.connect('enter-notify-event',self.secret_enter)
@@ -286,6 +299,7 @@ class Card(Gtk.ApplicationWindow):
             self.title_field.set_no_show_all(True);self.title_field.hide()
             self.text.set_sensitive(False);self.title_entry.set_sensitive(False)
             self.attachments_box.set_no_show_all(True);self.attachments_box.hide()
+        self.sync_secret_badge()
         self.show()
         # One normal GTK placement, outside the Shell process, after mapping.
         self.move(note['x'],note['y'])
@@ -346,6 +360,13 @@ class Card(Gtk.ApplicationWindow):
         style={'b':'bold','i':'italic','u':'underline'}.get(key)
         if style:return self.toggle_format(style)
         if key=='e':self.text.emit('insert-emoji');return True
+        return False
+
+    def secret_escape_press(self,_widget,event):
+        if (Gdk.keyval_name(event.keyval)=='Escape' and self.note.get('secret')
+                and not self.secret_locked):
+            self.lock_secret()
+            return True
         return False
 
     def document_changed(self):
@@ -447,17 +468,21 @@ class Card(Gtk.ApplicationWindow):
 
     def key_press(self,_widget,event):
         if hasattr(self,'secret_activity'):self.secret_activity()
+        key_name=Gdk.keyval_name(event.keyval)
+        if (event.state&Gdk.ModifierType.CONTROL_MASK and
+                (key_name or '').lower()=='h'):
+            self.hide_note()
+            return True
         if getattr(self,'secret_locked',False):return False
-        if Gdk.keyval_name(event.keyval) in ('Control_L','Control_R'):self.refresh_link_hover()
+        if key_name=='Escape' and self.note.get('secret'):
+            self.lock_secret();return True
+        if key_name in ('Control_L','Control_R'):self.refresh_link_hover()
         if event.state&Gdk.ModifierType.CONTROL_MASK:
             key=(Gdk.keyval_name(event.keyval) or '').lower()
             if key in ('z','y'):self.undo(key=='y' or bool(event.state&Gdk.ModifierType.SHIFT_MASK));return True
             if key=='s':self.flush();return True
             if key=='0':self.restore_size();return True
             if key=='n':self.app.new_card(self);return True
-            if key=='h':
-                self.hide_note()
-                return True
         return False
 
     def clear_link_hover(self):
@@ -520,6 +545,85 @@ class Card(Gtk.ApplicationWindow):
     def menu_opened(self):
         self.sync_secret_menu_actions()
         self.refresh_note_menus()
+        pointer_state=self.menu_pointer_state()
+        self.menu_buttons_down=pointer_state[2]&self.menu_button_mask() if pointer_state else 0
+        if not self.menu_pointer_timer:
+            self.menu_pointer_timer=GLib.timeout_add(10,self.watch_menu_outside_click)
+
+    @staticmethod
+    def menu_button_mask():
+        return int(Gdk.ModifierType.BUTTON1_MASK|Gdk.ModifierType.BUTTON2_MASK|
+            Gdk.ModifierType.BUTTON3_MASK)
+
+    def menu_pointer_state(self):
+        try:
+            pointer=self.get_display().get_default_seat().get_pointer()
+            screen,_,_=pointer.get_position()
+            _,x,y,state=screen.get_root_window().get_device_position(pointer)
+            return int(x),int(y),int(state)
+        except Exception:
+            return None
+
+    def menu_windows(self):
+        pending=[self.options_menu];seen=set()
+        while pending:
+            menu=pending.pop()
+            if id(menu) in seen:continue
+            seen.add(id(menu))
+            window=menu.get_window()
+            if window:
+                try:
+                    _ok,x,y=window.get_origin()
+                    geometry=window.get_geometry()
+                    yield int(x),int(y),int(geometry[2]),int(geometry[3])
+                except Exception:pass
+            for item in menu.get_children():
+                submenu=item.get_submenu()
+                if submenu and submenu.get_visible():pending.append(submenu)
+
+    def pointer_over_menu(self,x,y):
+        windows=list(self.menu_windows())
+        if not windows:return None
+        return any(left<=x<left+width and top<=y<top+height
+            for left,top,width,height in windows)
+
+    def watch_menu_outside_click(self):
+        if not self.options_menu.get_visible():
+            self.menu_pointer_timer=0
+            return False
+        pointer_state=self.menu_pointer_state()
+        if pointer_state:
+            x,y,state=pointer_state
+            buttons_down=state&self.menu_button_mask()
+            newly_pressed=buttons_down&~self.menu_buttons_down
+            self.menu_buttons_down=buttons_down
+            inside_menu=self.pointer_over_menu(x,y) if newly_pressed else None
+            if newly_pressed and inside_menu is False:
+                self.menu_pointer_timer=0
+                self.options_menu.popdown()
+                return False
+        return True
+
+    def menu_closed(self,*_):
+        if self.menu_pointer_timer:
+            GLib.source_remove(self.menu_pointer_timer);self.menu_pointer_timer=0
+
+    def menu_escape_press(self,_menu,event):
+        if Gdk.keyval_name(event.keyval)=='Escape':
+            self.options_menu.popdown()
+            return True
+        return False
+
+    def draw_secret_badge(self,_widget,context):
+        if cairo is None:return False
+        context.set_source_rgb(0,0,0)
+        context.set_line_width(1.8);context.set_line_cap(cairo.LINE_CAP_ROUND)
+        context.arc(8,8,4.2,3.141592653589793,6.283185307179586);context.stroke()
+        context.rectangle(3,7.5,10,9);context.fill()
+        context.set_source_rgba(1,1,1,0.9)
+        context.arc(8,11.3,1,0,6.283185307179586);context.fill()
+        context.rectangle(7.5,11.3,1,2.6);context.fill()
+        return False
 
     def refresh_note_menus(self):
         hidden=self.app.hidden_notes()
@@ -535,9 +639,10 @@ class Card(Gtk.ApplicationWindow):
                 empty=ui.widget(Gtk.MenuItem,label=ui.msg(empty_key));empty.set_sensitive(False);menu.append(empty)
             else:
                 for note in notes:
-                    label=self.app.note_menu_title(note)
+                    details=note.note if hasattr(note,'note') else note
+                    label=self.app.note_menu_title(details)
                     entry=ui.widget(Gtk.MenuItem,label=label)
-                    entry.connect('activate',lambda _item,identity=note['id']:callback(identity))
+                    entry.connect('activate',lambda _item,identity=details['id'],action=callback:action(identity))
                     menu.append(entry)
             menu.show_all()
 
@@ -547,6 +652,10 @@ class Card(Gtk.ApplicationWindow):
         for name in ('attach_menu_item','email_menu_item'):
             item=getattr(self,name,None)
             if item:item.set_sensitive(enabled)
+
+    def sync_secret_badge(self):
+        badge=getattr(self,'secret_badge',None)
+        if badge:badge.set_visible(bool(self.note.get('secret') and not self.secret_locked))
 
     def context_menu_press(self,_widget,event):
         if event.button==3:
@@ -824,7 +933,9 @@ class Card(Gtk.ApplicationWindow):
         dialog=ui.widget(Gtk.Dialog,transient_for=self,modal=True,title=ui.msg('sticky.email_note'))
         box=dialog.get_content_area();box.set_spacing(8);box.set_border_width(16)
         recipient=Gtk.Entry();recipient.set_max_length(254);recipient.set_placeholder_text(ui.tr('sticky.email_recipient'))
+        recipient.set_activates_default(True)
         subject=Gtk.Entry();subject.set_max_length(200);subject.set_text(self.saved_title)
+        subject.set_activates_default(True)
         box.pack_start(ui.widget(Gtk.Label,label=ui.msg('sticky.email_recipient'),xalign=0),False,False,0)
         box.pack_start(recipient,False,False,0)
         box.pack_start(ui.widget(Gtk.Label,label=ui.msg('sticky.email_subject'),xalign=0),False,False,0)
@@ -851,6 +962,7 @@ class Card(Gtk.ApplicationWindow):
         def item(title,callback):
             widget=ui.widget(Gtk.MenuItem,label=title);widget.connect('activate',lambda *_:callback());menu.append(widget);return widget
         item(ui.msg('sticky.settings'),self.show_secret_settings)
+        item(ui.msg('sticky.shortcuts'),self.show_shortcuts)
         attach_item=ui.widget(Gtk.MenuItem,label=ui.msg('sticky.attach_files'))
         attach_item.set_sensitive(not self.secret_locked);attach_item.connect('activate',lambda *_:self.attach_files());menu.append(attach_item)
         email_item=ui.widget(Gtk.MenuItem,label=ui.msg('sticky.email_note'))
@@ -865,7 +977,8 @@ class Card(Gtk.ApplicationWindow):
         item(ui.msg('sticky.new_note'),lambda:self.app.new_card(self))
         restore=item(ui.msg('sticky.restore_size'),self.restore_size)
         restore.set_sensitive(not self.secret_locked)
-        colors=Gtk.Menu();parent=ui.widget(Gtk.MenuItem,label=ui.msg('sticky.color'));parent.set_submenu(colors);parent.set_sensitive(not self.secret_locked);menu.append(parent)
+        colors=Gtk.Menu();colors.connect('key-press-event',self.menu_escape_press)
+        parent=ui.widget(Gtk.MenuItem,label=ui.msg('sticky.color'));parent.set_submenu(colors);parent.set_sensitive(not self.secret_locked);menu.append(parent)
         for name,color in zip(NAMES,COLORS):
             entry=ui.widget(Gtk.MenuItem,label=name);entry.connect('activate',lambda _,c=color:self.set_property_value(color=c));colors.append(entry)
         above=ui.widget(Gtk.CheckMenuItem,label=ui.msg('sticky.above'));above.set_active(bool(self.note['above']))
@@ -874,9 +987,11 @@ class Card(Gtk.ApplicationWindow):
         item(ui.msg('sticky.hide'),self.hide_note)
         archive=item(ui.msg('sticky.archive'),self.archive_note)
         archive.set_sensitive(not self.secret_locked)
-        hidden_menu=Gtk.Menu();hidden_item=ui.widget(Gtk.MenuItem,label=ui.msg('sticky.show_hidden_notes'))
+        hidden_menu=Gtk.Menu();hidden_menu.connect('key-press-event',self.menu_escape_press)
+        hidden_item=ui.widget(Gtk.MenuItem,label=ui.msg('sticky.show_hidden_notes'))
         hidden_item.set_submenu(hidden_menu);menu.append(hidden_item)
-        archived_menu=Gtk.Menu();archived_item=ui.widget(Gtk.MenuItem,label=ui.msg('sticky.archived_notes'))
+        archived_menu=Gtk.Menu();archived_menu.connect('key-press-event',self.menu_escape_press)
+        archived_item=ui.widget(Gtk.MenuItem,label=ui.msg('sticky.archived_notes'))
         archived_item.set_submenu(archived_menu);menu.append(archived_item)
         item(ui.msg('sticky.delete_note'),self.delete_note)
         if menu is getattr(self,'options_menu',None):
@@ -887,6 +1002,36 @@ class Card(Gtk.ApplicationWindow):
         if menu is getattr(self,'options_menu',None):
             self.secret_edit_menu_items=[attach_item,email_item,restore,parent,above,archive]
             self.sync_secret_menu_actions()
+
+    def show_shortcuts(self):
+        dialog=ui.widget(Gtk.Dialog,transient_for=self,modal=True,title=ui.msg('sticky.shortcuts_title'))
+        dialog.set_resizable(False)
+        box=dialog.get_content_area();box.set_border_width(18)
+        grid=Gtk.Grid(column_spacing=22,row_spacing=8)
+        shortcuts=(
+            ('Ctrl+N','sticky.shortcut_new_note'),
+            ('Ctrl+H','sticky.shortcut_hide_note'),
+            ('Ctrl+0','sticky.shortcut_restore_size'),
+            ('Ctrl+S','sticky.shortcut_save'),
+            ('Ctrl+Z','sticky.shortcut_undo'),
+            ('Ctrl+Y / Ctrl+Shift+Z','sticky.shortcut_redo'),
+            ('Ctrl+B','sticky.shortcut_bold'),
+            ('Ctrl+I','sticky.shortcut_italic'),
+            ('Ctrl+U','sticky.shortcut_underline'),
+            ('Ctrl+E','sticky.shortcut_emoji'),
+            ('Esc','sticky.shortcut_lock_secret'),
+            ('Ctrl+clique','sticky.shortcut_open_link'),
+        )
+        for row,(shortcut,description) in enumerate(shortcuts):
+            key=Gtk.Label(label=shortcut,xalign=1);key.set_selectable(True)
+            key.get_style_context().add_class('dim-label')
+            action=ui.widget(Gtk.Label,label=ui.msg(description),xalign=0)
+            grid.attach(key,0,row,1,1);grid.attach(action,1,row,1,1)
+        box.pack_start(grid,False,False,0)
+        dialog.add_button(ui.tr('sticky.shortcuts_close'),Gtk.ResponseType.CLOSE)
+        dialog.set_default_response(Gtk.ResponseType.CLOSE)
+        dialog.show_all();dialog.run();dialog.destroy()
+        return False
 
     def archive_note(self):
         if not self.alive or not self.authorize_secret_edit() or not self.flush():return False
@@ -1004,6 +1149,7 @@ class Card(Gtk.ApplicationWindow):
         if not self.alive or not self.note.get('secret'):return
         saved=self.flush()
         self.secret_locked=True
+        self.sync_secret_badge()
         self.status.set_text('');self.status.hide()
         self.sync_secret_menu_actions()
         if self.emoji_dialog:self.emoji_dialog.destroy()
@@ -1021,6 +1167,7 @@ class Card(Gtk.ApplicationWindow):
         if not self.note.get('secret') or not self.secret_locked:return
         if not self.authenticate_secret() or not self.alive:return
         self.secret_locked=False;self.secret_activity()
+        self.sync_secret_badge()
         self.sync_secret_menu_actions()
         self.secret_stack.set_visible_child_name('editor')
         self.scroll.show_all()
@@ -1197,6 +1344,7 @@ class Card(Gtk.ApplicationWindow):
             self.secret_syncing=True
             for item in self.secret_items:item.set_active(bool(self.note.get('secret')))
             self.secret_syncing=False
+            self.sync_secret_badge()
 
     def close_requested(self,*_):
         self.hide_note()
@@ -1252,7 +1400,7 @@ class Card(Gtk.ApplicationWindow):
         for dialog in [getattr(self,'auth_dialog',None),getattr(self,'settings_dialog',None)]:
             if dialog:dialog.destroy()
         if self.emoji_dialog:self.emoji_dialog.destroy()
-        for timer in [self.history_timer,self.geometry_timer]:
+        for timer in [self.history_timer,self.geometry_timer,self.menu_pointer_timer]:
             if timer:GLib.source_remove(timer)
-        self.history_timer=0;self.geometry_timer=0
+        self.history_timer=0;self.geometry_timer=0;self.menu_pointer_timer=0
 

@@ -1,5 +1,5 @@
 #!/usr/bin/python3
-"""Independent sticky notes with no GNOME Shell integration."""
+"""Independent sticky notes with GNOME desktop launcher actions."""
 import signal
 import sys
 import gi
@@ -13,11 +13,28 @@ from ui_language import ui
 
 class Postits(Gtk.Application):
     def __init__(self,store=None):
-        super().__init__(application_id='io.orbitz.Postits',flags=Gio.ApplicationFlags.FLAGS_NONE)
+        super().__init__(application_id='io.orbitz.Postits',flags=Gio.ApplicationFlags.HANDLES_COMMAND_LINE)
         self.store=store;self.monitor_timer=0
         self.connect('activate',self.activate_cards)
+        self.connect('command-line',self.command_line)
         self.connect('startup',self.startup_cards)
         self.connect('shutdown',self.shutdown_cards)
+
+    def command_line(self,application,command_line):
+        """Route desktop-file actions to the already-running application."""
+        args=command_line.get_arguments()
+        if self.store is None:return 1
+        if '--new-note' in args:
+            self.new_card()
+        elif '--open-hidden-notes' in args:
+            identities=[window.note['id'] for window in self.hidden_notes()]
+            for identity in identities:self.show_hidden_note(identity)
+        elif '--close-notes' in args:
+            for window in self.get_windows():
+                if hasattr(window,'hide_note') and window.get_visible():window.hide_note()
+        else:
+            self.activate_cards()
+        return 0
 
     def startup_cards(self,*_):
         self.hold()
@@ -72,10 +89,11 @@ class Postits(Gtk.Application):
             if hasattr(window,'note') and getattr(window,'alive',False)
             and not window.get_visible() and not window.note.get('archived')]
 
-    @staticmethod
-    def note_menu_title(note):
+    def note_menu_title(self,note):
         if note.get('secret'):return ui.msg('sticky.secret_note')
-        return (note.get('title') or '').strip() or ui.msg('sticky.untitled_note')
+        title=(note.get('title') or '').strip()
+        if title:return title
+        return f"undefined-{self.store.note_number(note['id'])}"
 
     def show_hidden_note(self,identity):
         for window in self.hidden_notes():

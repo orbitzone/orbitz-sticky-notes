@@ -32,3 +32,17 @@ A composição apresenta um modal para destinatário e assunto, preenchendo o as
 
 
 A posição e o tamanho de cada nota são persistidos por ID após o arraste nativo. O salvamento com debounce cobre eventos de geometria; ocultar/fechar a nota e encerrar o aplicativo também salvam a geometria pendente. Ao restaurar uma nota oculta ou reabrir o app, as coordenadas salvas são usadas para selecionar o monitor antes da primeira resposta do gerenciador de janelas (que pode informar temporariamente a posição do monitor principal) e reaplicadas mesmo quando estão dentro dos limites; a posição é ajustada aos limites do monitor disponível se a configuração de telas tiver mudado.
+
+
+Com o menu aberto, uma verificação temporária da posição e dos botões do ponteiro fecha o menu em um clique fora, inclusive no desktop ou em outro aplicativo; Escape fecha o menu explicitamente. O popup usa o mecanismo nativo de Gtk.MenuButton. Notas secretas desbloqueadas mostram um cadeado preto à esquerda do título; Escape no título ou no corpo salva e bloqueia a nota imediatamente.
+
+
+O item “Atalhos” no menu abre um diálogo somente informativo em português ou inglês com os atalhos de teclado e Ctrl+clique disponíveis no app.
+
+No diálogo de composição de e-mail, Enter nos campos de destinatário e assunto ativa o botão padrão “Abrir e-mail”.
+
+O submenu “Exibir notas ocultas” normaliza janelas `Card` para os dados da nota antes de renderizar e liga cada ação à restauração da janela oculta correspondente. Notas sem título recebem no menu uma referência estável `undefined-N` derivada do número da linha SQLite, sem alterar o título editável da nota; notas secretas continuam identificadas apenas como “Nota secreta”.
+
+Ctrl+H é processado antes da barreira de edição da nota secreta e oculta a janela mesmo quando ela já está bloqueada.
+
+O menu de contexto do lançador GNOME oferece “Nova nota”, “Abrir notas ocultas” e “Fechar notas”. As ações são encaminhadas ao processo único `io.orbitz.Postits`; abrir notas ocultas restaura as janelas ocultas da sessão atual, e fechar notas oculta todas as janelas visíveis sem encerrar o app. As janelas não são mais ignoradas pelo gerenciador de tarefas, permitindo que o GNOME mostre o indicador de aplicativo em execução no ícone enquanto houver notas abertas. O Flatpak instalado nesta máquina remove grupos `Desktop Action` do arquivo exportado; o lançador de usuário `data/io.orbitz.Postits.flatpak.desktop` preserva as ações e chama a mesma instalação Flatpak. O arquivo `.desktop` principal segue como fonte para instalações nativas.
