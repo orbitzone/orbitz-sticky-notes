@@ -28,7 +28,14 @@ class Postits(Gtk.Application):
             self.new_card()
         elif '--open-hidden-notes' in args:
             identities=[window.note['id'] for window in self.hidden_notes()]
-            for identity in identities:self.show_hidden_note(identity)
+            if identities:
+                for identity in identities:self.show_hidden_note(identity)
+            else:
+                # A desktop action can reach this process after a session or
+                # application restart, when hidden Gtk windows are no longer
+                # represented in get_windows(). Reuse normal activation as the
+                # recovery path instead of silently doing nothing.
+                self.activate_cards()
         elif '--close-notes' in args:
             for window in self.get_windows():
                 if hasattr(window,'hide_note') and window.get_visible():window.hide_note()

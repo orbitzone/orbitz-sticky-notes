@@ -1258,7 +1258,9 @@ class Card(Gtk.ApplicationWindow):
 
     def open_attachment_folder(self,attachment):
         try:
-            parent=Gio.File.new_for_path(attachment['path']).get_parent()
+            source_path=attachment.get('source_path')
+            candidate=source_path if source_path and os.path.exists(source_path) else attachment['path']
+            parent=Gio.File.new_for_path(candidate).get_parent()
             if parent is None:raise ValueError('Attachment has no parent folder')
             Gio.AppInfo.launch_default_for_uri(parent.get_uri(),self.get_display().get_app_launch_context())
         except Exception:

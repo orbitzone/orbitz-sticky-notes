@@ -185,7 +185,8 @@ class Store:
         CREATE TABLE IF NOT EXISTS metadata(key TEXT PRIMARY KEY, value TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS attachments(
           id TEXT PRIMARY KEY, note_id TEXT NOT NULL REFERENCES notes(id) ON DELETE CASCADE,
-          path TEXT NOT NULL, name TEXT NOT NULL, size INTEGER NOT NULL, added_at INTEGER NOT NULL);
+          path TEXT NOT NULL, name TEXT NOT NULL, size INTEGER NOT NULL, added_at INTEGER NOT NULL,
+          source_path TEXT NOT NULL DEFAULT '', managed INTEGER NOT NULL DEFAULT 0 CHECK(managed IN (0,1)));
         ''')
         # Add display title/privacy metadata without changing existing text,
         # IDs/revisions or retained snapshots. Secrets remain plaintext on disk.
@@ -208,6 +209,17 @@ class Store:
         except BaseException:
             if self.db.in_transaction:self.db.rollback()
             raise
+        attachment_columns={row[1] for row in self.db.execute('PRAGMA table_info(attachments)')}
+        self.db.execute('BEGIN IMMEDIATE')
+        try:
+            if 'source_path' not in attachment_columns:
+                self.db.execute("ALTER TABLE attachments ADD COLUMN source_path TEXT NOT NULL DEFAULT ''")
+            if 'managed' not in attachment_columns:
+                self.db.execute('ALTER TABLE attachments ADD COLUMN managed INTEGER NOT NULL DEFAULT 0 CHECK(managed IN (0,1))')
+            self.db.commit()
+        except BaseException:
+            if self.db.in_transaction:self.db.rollback()
+            raise
         if not self.db.execute("SELECT 1 FROM metadata WHERE key='imported'").fetchone():
             raw={'notes':'','note_color':COLORS[0]}
             if legacy and Path(legacy).exists():
@@ -216,6 +228,7 @@ class Store:
             with self.db:
                 self.db.execute('INSERT INTO notes(id,text,color) VALUES(?,?,?)',(str(uuid.uuid4()),raw['notes'],raw.get('note_color') if raw.get('note_color') in COLORS else COLORS[0]))
                 self.db.execute("INSERT INTO metadata VALUES('imported','1')")
+        self._migrate_accessible_legacy_attachments()
         self.backup()
 
     def backup(self):
@@ -487,29 +500,152 @@ class Store:
             raise _i18n.exception(ValueError,'domain.sticky_storage.attachment_type')
         return path.resolve(strict=True),info.st_size
 
+    @property
+    def attachments_directory(self):
+        return self.directory/'attachments'
+
+    def _ensure_attachments_directory(self):
+        directory=self.attachments_directory
+        if os.path.lexists(directory):
+            info=os.lstat(directory)
+            if not stat.S_ISDIR(info.st_mode) or info.st_uid!=os.geteuid():
+                raise OSError('Attachment storage must be a real directory owned by this user.')
+        else:
+            directory.mkdir(mode=0o700)
+        os.chmod(directory,0o700)
+        return directory
+
+    def _copy_attachment(self,source,identity):
+        """Copy a selected file into durable private app data and check races."""
+        if not re.fullmatch(r'[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}',identity):
+            raise OSError('Attachment identity is invalid; refusing to create a file.')
+        directory=self._ensure_attachments_directory()
+        before=os.lstat(source)
+        if not stat.S_ISREG(before.st_mode):
+            raise _i18n.exception(ValueError,'domain.sticky_storage.attachment_invalid')
+        source_fd=os.open(source,os.O_RDONLY|getattr(os,'O_CLOEXEC',0))
+        temporary=None;destination_fd=None
+        try:
+            opened=os.fstat(source_fd);after=os.lstat(source)
+            if (not stat.S_ISREG(opened.st_mode) or not stat.S_ISREG(after.st_mode)
+                    or (before.st_dev,before.st_ino)!=(opened.st_dev,opened.st_ino)
+                    or (after.st_dev,after.st_ino)!=(opened.st_dev,opened.st_ino)):
+                raise OSError('Attachment changed while it was being opened.')
+            if opened.st_size>ATTACHMENT_MAX_FILE_BYTES:
+                raise _i18n.exception(ValueError,'domain.sticky_storage.attachment_too_large')
+            suffix=source.suffix.lower()
+            target=directory/f'{identity}{suffix}'
+            destination_fd,temp_name=tempfile.mkstemp(prefix='.pending-',dir=directory)
+            temporary=Path(temp_name)
+            os.fchmod(destination_fd,0o600)
+            copied=0
+            while True:
+                chunk=os.read(source_fd,1024*1024)
+                if not chunk:break
+                copied+=len(chunk)
+                if copied>ATTACHMENT_MAX_FILE_BYTES:
+                    raise _i18n.exception(ValueError,'domain.sticky_storage.attachment_too_large')
+                view=memoryview(chunk)
+                while view:
+                    count=os.write(destination_fd,view);view=view[count:]
+            final_source=os.fstat(source_fd)
+            if (copied!=opened.st_size or
+                    (final_source.st_dev,final_source.st_ino,final_source.st_size,final_source.st_mtime_ns,final_source.st_ctime_ns)
+                    !=(opened.st_dev,opened.st_ino,opened.st_size,opened.st_mtime_ns,opened.st_ctime_ns)):
+                raise OSError('Attachment changed while it was being copied.')
+            os.fsync(destination_fd);os.close(destination_fd);destination_fd=None
+            os.replace(temporary,target);temporary=None
+            directory_fd=os.open(directory,os.O_RDONLY|getattr(os,'O_DIRECTORY',0)|getattr(os,'O_NOFOLLOW',0))
+            try:os.fsync(directory_fd)
+            finally:os.close(directory_fd)
+            return target,copied
+        finally:
+            os.close(source_fd)
+            if destination_fd is not None:os.close(destination_fd)
+            if temporary is not None:
+                try:temporary.unlink()
+                except FileNotFoundError:pass
+
+    def _migrate_accessible_legacy_attachments(self):
+        """Persist legacy portal/source paths when their files are still readable."""
+        rows=[dict(row) for row in self.db.execute('SELECT * FROM attachments WHERE managed=0')]
+        for row in rows:
+            source=Path(row['path'])
+            if not source.exists():continue
+            try:source,size=self._attachment_path(source)
+            except (OSError,ValueError):continue
+            if not re.fullmatch(r'[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}',row['id']):continue
+            # A stale portal grant or a full disk must not prevent opening
+            # every note. Keep the legacy reference and retry on next startup.
+            try:managed_path,copied_size=self._copy_attachment(source,row['id'])
+            except OSError:continue
+            try:
+                with self.db:
+                    updated=self.db.execute('UPDATE attachments SET path=?,source_path=?,size=?,managed=1 WHERE id=? AND managed=0',
+                        (str(managed_path),str(source),copied_size,row['id'])).rowcount
+                if updated!=1:
+                    self._remove_managed_attachment_file({'id':row['id'],'path':str(managed_path),
+                        'source_path':str(source),'name':row['name'],'managed':1})
+            except BaseException:
+                self._remove_managed_attachment_file({'id':row['id'],'path':str(managed_path),
+                    'source_path':str(source),'name':row['name'],'managed':1})
+                raise
+
+    def _remove_managed_attachment_file(self,attachment):
+        if not attachment or not attachment.get('managed'):return
+        identity=attachment.get('id','')
+        if not re.fullmatch(r'[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}',identity):
+            raise OSError('Attachment identity is invalid; refusing to remove a file.')
+        path=Path(attachment['path']);directory=self.attachments_directory
+        if path.parent!=directory or path.name!=identity+Path(attachment.get('source_path') or attachment['name']).suffix.lower():
+            raise OSError('Attachment path is outside managed storage; refusing to remove it.')
+        try:directory_info=os.lstat(directory)
+        except FileNotFoundError:return
+        if not stat.S_ISDIR(directory_info.st_mode) or directory_info.st_uid!=os.geteuid():
+            raise OSError('Attachment storage directory is not safe to modify.')
+        directory_fd=os.open(directory,os.O_RDONLY|getattr(os,'O_DIRECTORY',0)|getattr(os,'O_NOFOLLOW',0))
+        try:
+            try:info=os.stat(path.name,dir_fd=directory_fd,follow_symlinks=False)
+            except FileNotFoundError:return
+            if not (stat.S_ISREG(info.st_mode) or stat.S_ISLNK(info.st_mode)):
+                raise OSError('Managed attachment is not a removable file.')
+            os.unlink(path.name,dir_fd=directory_fd);os.fsync(directory_fd)
+        finally:os.close(directory_fd)
+
     def attachments(self,identity):
         if not self.db.execute('SELECT 1 FROM notes WHERE id=?',(identity,)).fetchone():
             raise _i18n.exception(ValueError,'domain.sticky_storage.note_not_found')
         return [dict(row) for row in self.db.execute('SELECT * FROM attachments WHERE note_id=? ORDER BY rowid',(identity,))]
 
     def add_attachment(self,identity,path):
-        path,size=self._attachment_path(path)
+        source,size=self._attachment_path(path)
         row=self.db.execute('SELECT 1 FROM notes WHERE id=?',(identity,)).fetchone()
         if not row:raise _i18n.exception(ValueError,'domain.sticky_storage.note_not_found')
         current=self.attachments(identity)
         if len(current)>=ATTACHMENT_MAX_COUNT:raise _i18n.exception(ValueError,'domain.sticky_storage.attachment_count')
         if sum(item['size'] for item in current)+size>ATTACHMENT_MAX_TOTAL_BYTES:
             raise _i18n.exception(ValueError,'domain.sticky_storage.attachment_total_size')
-        if any(item['path']==str(path) for item in current):
+        if any(item.get('source_path')==str(source) or item['path']==str(source) for item in current):
             raise _i18n.exception(ValueError,'domain.sticky_storage.attachment_duplicate')
         identity_id=str(uuid.uuid4())
-        with self.db:
-            self.db.execute('INSERT INTO attachments(id,note_id,path,name,size,added_at) VALUES(?,?,?,?,?,?)',
-                            (identity_id,identity,str(path),path.name,size,int(time.time())))
+        managed_path,copied_size=self._copy_attachment(source,identity_id)
+        try:
+            with self.db:
+                self.db.execute('INSERT INTO attachments(id,note_id,path,name,size,added_at,source_path,managed) VALUES(?,?,?,?,?,?,?,1)',
+                                (identity_id,identity,str(managed_path),source.name,copied_size,int(time.time()),str(source)))
+        except BaseException:
+            self._remove_managed_attachment_file({'id':identity_id,'path':str(managed_path),
+                'source_path':str(source),'name':source.name,'managed':1})
+            raise
         return dict(self.db.execute('SELECT * FROM attachments WHERE id=?',(identity_id,)).fetchone())
 
     def remove_attachment(self,identity,attachment_id):
-        with self.db:return self.db.execute('DELETE FROM attachments WHERE id=? AND note_id=?',(attachment_id,identity)).rowcount==1
+        row=self.db.execute('SELECT * FROM attachments WHERE id=? AND note_id=?',(attachment_id,identity)).fetchone()
+        if row is None:return False
+        with self.db:
+            removed=self.db.execute('DELETE FROM attachments WHERE id=? AND note_id=?',(attachment_id,identity)).rowcount==1
+        if removed:self._remove_managed_attachment_file(dict(row))
+        return removed
 
     @staticmethod
     def _validate_pin(pin):
@@ -679,6 +815,7 @@ class Store:
                     self.db.rollback();return False
                 if expected_revision is not None and row['revision']!=expected_revision:
                     raise _i18n.exception(ValueError, 'domain.sticky_storage.concurrent_edit')
+                attachments=[dict(item) for item in self.db.execute('SELECT * FROM attachments WHERE note_id=?',(identity,))]
                 try:self._purge_backups(identity,directory)
                 except Exception as error:
                     raise _i18n.exception(BackupPurgeError,'domain.sticky_storage.backup_purge_failed') from error
@@ -687,6 +824,7 @@ class Store:
                     raise OSError('The note could not be removed from active storage; retry the deletion.')
                 self.db.commit()
                 self._checkpoint_after_deletion()
+                for attachment in attachments:self._remove_managed_attachment_file(attachment)
                 return True
             except BaseException:
                 if self.db.in_transaction:self.db.rollback()
@@ -699,6 +837,9 @@ class Store:
             self.db.execute('BEGIN IMMEDIATE')
             try:
                 identities=[row[0] for row in self.db.execute('SELECT id FROM notes WHERE secret=1 ORDER BY rowid')]
+                attachments=[]
+                for identity in identities:
+                    attachments.extend(dict(row) for row in self.db.execute('SELECT * FROM attachments WHERE note_id=?',(identity,)))
                 for identity in identities:
                     self._purge_backups(identity,directory)
                 self._purge_backups(None,directory,reset_pin=True)
@@ -710,6 +851,7 @@ class Store:
             except BaseException:
                 if self.db.in_transaction:self.db.rollback()
                 raise
+        for attachment in attachments:self._remove_managed_attachment_file(attachment)
         checkpoint_clean=self._checkpoint_after_deletion()
         return {'note_ids':identities,'wal_cleaned':checkpoint_clean}
 

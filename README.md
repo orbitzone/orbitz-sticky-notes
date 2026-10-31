@@ -54,7 +54,7 @@ The Flatpak stores its database and backups under:
 
 The PIN is a **visual privacy lock**, not encryption. Note titles, text, attachment names, paths, and backups are not encrypted in the local database. Do not use secret notes as a substitute for encrypted storage. Resetting a forgotten PIN permanently deletes secret notes so a new PIN can be set; ordinary notes are preserved.
 
-Attachments remain in their original folders. Orbitz stores their paths and names, and does not delete the original files when a note or attachment link is removed. The app asks for access to files you select; it does not request general access to your home folder or network. Email drafts are opened in your system's default email application for you to review and send.
+Attachments are copied into Orbitz's private per-user data folder so they remain available after a temporary file-portal grant expires. The selected originals stay in their folders. Removing an attachment or deleting a note removes Orbitz's managed copy, not the original. The app asks for access to files you select; it does not request general access to your home folder or network. Email drafts are opened in your system's default email application for you to review and send. Attachment copies are not encrypted, so protect your Linux user account and backups accordingly. Daily SQLite snapshots do not include attachment files; back up the entire app data folder to preserve both. Older attachments whose portal access has already expired must be attached again.
 
 ## Compatibility and current limits
 
