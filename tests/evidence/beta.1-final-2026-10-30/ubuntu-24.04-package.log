@@ -1,0 +1,58 @@
+11b1d7bcaa27911cde14d3947128e3d64256f5896167bb2014ef7a9cfe58a9ac  /tmp/orbitz-beta-official.flatpak
+Installing app/io.orbitz.Postits/x86_64/master
+dbus-daemon[12049]: [session uid=1000 pid=12049] Activating service name='org.freedesktop.Flatpak' requested by ':1.0' (uid=1000 pid=12050 comm="flatpak run --env=ORBITZ_QA_HOLD=1 --command=pytho" label="flatpak (unconfined)")
+dbus-daemon[12049]: [session uid=1000 pid=12049] Successfully activated service 'org.freedesktop.Flatpak'
+dbus-daemon[12049]: [session uid=1000 pid=12049] Activating service name='org.freedesktop.portal.Documents' requested by ':1.0' (uid=1000 pid=12050 comm="flatpak run --env=ORBITZ_QA_HOLD=1 --command=pytho" label="flatpak (unconfined)")
+dbus-daemon[12049]: [session uid=1000 pid=12049] Activating service name='org.freedesktop.impl.portal.PermissionStore' requested by ':1.2' (uid=1000 pid=12066 comm="/usr/libexec/xdg-document-portal" label="unconfined")
+dbus-daemon[12049]: [session uid=1000 pid=12049] Successfully activated service 'org.freedesktop.impl.portal.PermissionStore'
+dbus-daemon[12049]: [session uid=1000 pid=12049] Successfully activated service 'org.freedesktop.portal.Documents'
+fusermount3: failed to access mountpoint /run/user/1000/doc: Permission denied
+error: fuse init failed: Can't mount path /run/user/1000/doc
+F: Can't get document portal: GDBus.Error:org.freedesktop.portal.Error.Failed: Can't mount path /run/user/1000/doc
+dbus-daemon[12049]: [session uid=1000 pid=12049] Activating service name='org.a11y.Bus' requested by ':1.0' (uid=1000 pid=12050 comm="flatpak run --env=ORBITZ_QA_HOLD=1 --command=pytho" label="flatpak (unconfined)")
+dbus-daemon[12049]: [session uid=1000 pid=12049] Successfully activated service 'org.a11y.Bus'
+Gtk-Message: 22:10:54.126: Failed to load module "canberra-gtk-module"
+dbus-daemon[12049]: [session uid=1000 pid=12049] Activating service name='org.freedesktop.portal.Desktop' requested by ':1.6' (uid=1000 pid=12090 comm="xdg-dbus-proxy --args=41" label="flatpak (unconfined)")
+dbus-daemon[12049]: [session uid=1000 pid=12049] Activating service name='org.freedesktop.portal.Documents' requested by ':1.7' (uid=1000 pid=12101 comm="/usr/libexec/xdg-desktop-portal" label="unconfined")
+dbus-daemon[12049]: [session uid=1000 pid=12049] Successfully activated service 'org.freedesktop.portal.Documents'
+fusermount3: failed to access mountpoint /run/user/1000/doc: Permission denied
+error: fuse init failed: Can't mount path /run/user/1000/doc
+
+(/usr/libexec/xdg-desktop-portal:12101): xdg-desktop-portal-WARNING **: 22:10:54.163: Choosing gtk.portal for org.freedesktop.impl.portal.Lockdown as a last-resort fallback
+
+(/usr/libexec/xdg-desktop-portal:12101): xdg-desktop-portal-WARNING **: 22:10:54.163: The preferred method to match portal implementations to desktop environments is to use the portals.conf(5) configuration file
+dbus-daemon[12049]: [session uid=1000 pid=12049] Activating service name='org.freedesktop.impl.portal.desktop.gtk' requested by ':1.7' (uid=1000 pid=12101 comm="/usr/libexec/xdg-desktop-portal" label="unconfined")
+dbus-daemon[12049]: [session uid=1000 pid=12049] Activating service name='org.gtk.vfs.Daemon' requested by ':1.9' (uid=1000 pid=12116 comm="/usr/libexec/xdg-desktop-portal-gtk" label="unconfined")
+dbus-daemon[12049]: [session uid=1000 pid=12049] Successfully activated service 'org.gtk.vfs.Daemon'
+fusermount3: failed to access mountpoint /run/user/1000/gvfs: Permission denied
+dbus-daemon[12087]: Activating service name='org.a11y.atspi.Registry' requested by ':1.1' (uid=1000 pid=12116 comm="/usr/libexec/xdg-desktop-portal-gtk" label="unconfined")
+dbus-daemon[12087]: Successfully activated service 'org.a11y.atspi.Registry'
+SpiRegistry daemon is running with well-known name - org.a11y.atspi.Registry
+dbus-daemon[12049]: [session uid=1000 pid=12049] Successfully activated service 'org.freedesktop.impl.portal.desktop.gtk'
+
+(/usr/libexec/xdg-desktop-portal:12101): xdg-desktop-portal-WARNING **: 22:10:54.323: No skeleton to export
+
+(/usr/libexec/xdg-desktop-portal:12101): xdg-desktop-portal-WARNING **: 22:10:54.323: Choosing gtk.portal for org.freedesktop.impl.portal.FileChooser as a last-resort fallback
+
+(/usr/libexec/xdg-desktop-portal:12101): xdg-desktop-portal-WARNING **: 22:10:54.325: Choosing gtk.portal for org.freedesktop.impl.portal.AppChooser as a last-resort fallback
+
+(/usr/libexec/xdg-desktop-portal:12101): xdg-desktop-portal-WARNING **: 22:10:54.326: Choosing gtk.portal for org.freedesktop.impl.portal.Print as a last-resort fallback
+
+(/usr/libexec/xdg-desktop-portal:12101): xdg-desktop-portal-WARNING **: 22:10:54.328: Choosing gtk.portal for org.freedesktop.impl.portal.Notification as a last-resort fallback
+
+(/usr/libexec/xdg-desktop-portal:12101): xdg-desktop-portal-WARNING **: 22:10:54.329: Choosing gtk.portal for org.freedesktop.impl.portal.Inhibit as a last-resort fallback
+
+(/usr/libexec/xdg-desktop-portal:12101): xdg-desktop-portal-WARNING **: 22:10:54.331: Choosing gtk.portal for org.freedesktop.impl.portal.Access as a last-resort fallback
+
+(/usr/libexec/xdg-desktop-portal:12101): xdg-desktop-portal-WARNING **: 22:10:54.342: Choosing gtk.portal for org.freedesktop.impl.portal.Account as a last-resort fallback
+
+(/usr/libexec/xdg-desktop-portal:12101): xdg-desktop-portal-WARNING **: 22:10:54.345: Choosing gtk.portal for org.freedesktop.impl.portal.Email as a last-resort fallback
+
+(/usr/libexec/xdg-desktop-portal:12101): xdg-desktop-portal-WARNING **: 22:10:54.346: Choosing gtk.portal for org.freedesktop.impl.portal.DynamicLauncher as a last-resort fallback
+dbus-daemon[12049]: [session uid=1000 pid=12049] Successfully activated service 'org.freedesktop.portal.Desktop'
+dbus-daemon[12049]: [session uid=1000 pid=12049] Activating service name='org.freedesktop.portal.Flatpak' requested by ':1.13' (uid=1000 pid=12090 comm="xdg-dbus-proxy --args=41" label="flatpak (unconfined)")
+dbus-daemon[12049]: [session uid=1000 pid=12049] Successfully activated service 'org.freedesktop.portal.Flatpak'
+dbus-daemon[12049]: [session uid=1000 pid=12049] Activating service name='org.freedesktop.portal.IBus' requested by ':1.12' (uid=1000 pid=12090 comm="xdg-dbus-proxy --args=41" label="flatpak (unconfined)")
+dbus-daemon[12049]: [session uid=1000 pid=12049] Successfully activated service 'org.freedesktop.portal.IBus'
+{"attachment_after_original_removal": "passed", "database_integrity": "ok", "gtk_note_mapping": "passed", "close_and_open_hidden": "passed", "runtime": 3}
+A connection to the bus can't be made
